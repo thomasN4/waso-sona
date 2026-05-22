@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Toki Pona corpora fetched by scripts/fetch_data.py
+data/
+
