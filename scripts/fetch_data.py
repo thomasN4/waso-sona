@@ -70,27 +70,27 @@ def _http_download(url: str, dest: Path) -> None:
 # ---- Tatoeba --------------------------------------------------------------
 
 TATOEBA_URL = (
-    "https://downloads.tatoeba.org/exports/per_language/toki/toki_sentences.tsv.bz2"
+    "https://downloads.tatoeba.org/exports/per_language/tok/tok_sentences.tsv.bz2"
 )
 
 
 def fetch_tatoeba(raw_dir: Path) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
-    archive = raw_dir / "toki_sentences.tsv.bz2"
+    archive = raw_dir / "tok_sentences.tsv.bz2"
     _http_download(TATOEBA_URL, archive)
-    out = raw_dir / "toki_sentences.tsv"
+    out = raw_dir / "tok_sentences.tsv"
     with bz2.open(archive, "rb") as src, open(out, "wb") as dst:
         shutil.copyfileobj(src, dst)
 
 
 def iter_tatoeba(raw_dir: Path) -> Iterator[tuple[str, str]]:
-    path = raw_dir / "toki_sentences.tsv"
+    path = raw_dir / "tok_sentences.tsv"
     if not path.exists():
         return
     with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) >= 3 and parts[1] == "toki":
+            if len(parts) >= 3 and parts[1] == "tok":
                 yield parts[0], parts[2]
 
 
