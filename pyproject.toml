@@ -7,11 +7,24 @@ name = "waso-sona"
 version = "0.1.0"
 description = "Sitelen pona UCSUR tokenizer for Toki Pona."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = { file = "LICENSE" }
+dependencies = [
+    "torch>=2.7",
+    "tensorboard>=2.18",
+    "matplotlib>=3.9",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
 
 [tool.setuptools.packages.find]
 include = ["tokenizer*"]
