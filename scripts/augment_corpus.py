@@ -152,7 +152,9 @@ def _ollama_generate(prompt: str, model: str, max_tokens: int) -> tuple[str, int
         "stream": False,
         "think": False,
         "keep_alive": "10m",
-        "options": {"num_predict": max_tokens},
+        # Gemma 4's default of 1.0 drifts off the seed too easily; 0.8
+        # matches the temperature used in scripts/bench_gemma.py.
+        "options": {"num_predict": max_tokens, "temperature": 0.8},
     }).encode()
     req = urllib.request.Request(
         OLLAMA_URL,
@@ -191,24 +193,35 @@ def _process_seed(
     accepted: list[dict] = []
     rejects: collections.Counter = collections.Counter()
     total_tokens = 0
+    # Per-seed dedup: Gemma reliably re-emits the same paraphrase across
+    # attempts. Key by lowercased text so casing differences don't slip
+    # through as "new" records.
+    seen: set[str] = set()
+
+    def _consider(sent: str, mode: str, take_limit: int) -> None:
+        ok, reason = _filter_sentence(sent)
+        if not ok:
+            rejects[reason] += 1
+            return
+        key = sent.lower().strip()
+        if key in seen:
+            rejects["duplicate"] += 1
+            return
+        seen.add(key)
+        accepted.append({
+            "source": f"{model}/{mode}",
+            "seed": seed,
+            "mode": mode,
+            "text": sent,
+        })
 
     # --- paraphrase attempts ---
     for _ in range(paraphrase_n):
         try:
             text, toks = _ollama_generate(_paraphrase_prompt(seed), model, max_tokens)
             total_tokens += toks
-            # Ask for one sentence; take first sentence from response.
             for sent in _split_into_sentences(text)[:1]:
-                ok, reason = _filter_sentence(sent)
-                if ok:
-                    accepted.append({
-                        "source": f"{model}/paraphrase",
-                        "seed": seed,
-                        "mode": "paraphrase",
-                        "text": sent,
-                    })
-                else:
-                    rejects[reason] += 1
+                _consider(sent, "paraphrase", 1)
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             rejects["api_error"] += 1
             print(f"    [api_error paraphrase] {exc}", file=sys.stderr)
@@ -218,18 +231,8 @@ def _process_seed(
         try:
             text, toks = _ollama_generate(_continuation_prompt(seed), model, max_tokens)
             total_tokens += toks
-            # Up to 2 sentences from the continuation response.
             for sent in _split_into_sentences(text)[:2]:
-                ok, reason = _filter_sentence(sent)
-                if ok:
-                    accepted.append({
-                        "source": f"{model}/continuation",
-                        "seed": seed,
-                        "mode": "continuation",
-                        "text": sent,
-                    })
-                else:
-                    rejects[reason] += 1
+                _consider(sent, "continuation", 2)
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             rejects["api_error"] += 1
             print(f"    [api_error continuation] {exc}", file=sys.stderr)
