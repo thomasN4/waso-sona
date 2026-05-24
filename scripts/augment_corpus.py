@@ -129,10 +129,12 @@ def _filter_sentence(sentence: str) -> tuple[bool, str]:
         if max(bg_counts.values()) > 2:
             return False, "bigram_repetition"
 
-    # Rule 5: missing predicate
+    # Rule 5: missing predicate. A valid TP sentence has `li`, OR contains
+    # one of the three subjects that drop `li` (`mi`/`sina`/`o`) anywhere —
+    # they may follow a `la`-clause, e.g. "tenpo suno ni la mi tawa ma kasi".
     has_li = "li" in lower_words
-    starts_with_subject = lower_words[0] in {"mi", "sina", "o"}
-    if not has_li and not starts_with_subject:
+    has_li_dropping_subject = any(w in {"mi", "sina", "o"} for w in lower_words)
+    if not has_li and not has_li_dropping_subject:
         return False, "missing_predicate"
 
     return True, ""
