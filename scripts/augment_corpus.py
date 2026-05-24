@@ -276,10 +276,18 @@ def main() -> None:
         all_seeds = all_seeds[: args.max_seeds]
     print(f"Loaded {len(all_seeds)} seed sentences from {input_path}.")
 
-    # Resumability: collect seeds already in output
-    done_seeds: set[str] = set()
+    # Resumability: a sidecar file lists every seed that has been processed,
+    # even if it produced zero acceptances. Without this, low-yield seeds
+    # would be retried on every run and the script could never reach a
+    # no-op steady state.
+    done_path = output_path.with_suffix(output_path.suffix + ".done")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
+    done_seeds: set[str] = set()
+    if done_path.exists():
+        with done_path.open(encoding="utf-8") as fh:
+            done_seeds = {ln.strip() for ln in fh if ln.strip()}
+    elif output_path.exists():
+        # Migration: derive done set from any existing output records.
         with output_path.open(encoding="utf-8") as fh:
             for raw in fh:
                 try:
@@ -302,6 +310,7 @@ def main() -> None:
     start = time.monotonic()
 
     out_fh = output_path.open("a", encoding="utf-8")
+    done_fh = done_path.open("a", encoding="utf-8")
 
     def _work(seed: str) -> tuple[list[dict], collections.Counter, int]:
         return _process_seed(
@@ -327,6 +336,8 @@ def main() -> None:
             for rec in records:
                 out_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
             out_fh.flush()
+            done_fh.write(seed + "\n")
+            done_fh.flush()
 
             n_cands = sum(rejects.values()) + len(records)
             total_accepted += len(records)
@@ -343,6 +354,7 @@ def main() -> None:
             )
 
     out_fh.close()
+    done_fh.close()
 
     elapsed = time.monotonic() - start
     rate = total_tokens / elapsed if elapsed > 0 else 0.0
