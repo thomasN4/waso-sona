@@ -20,6 +20,12 @@ dependencies = [
     "accelerate>=1.0",
     "datasets>=3.0",
     "huggingface_hub>=0.25",
+    "trl>=0.12",
+    # Required for the `use_liger_kernel=True` flag below — we don't actually
+    # rely on Liger's kernels (Gemma 4 multimodal isn't in its registry; the
+    # flag is a no-op patcher for us) but the flag makes TRL skip a vocab-
+    # sized entropy metric in compute_loss that otherwise OOMs.
+    "liger-kernel>=0.8",
 ]
 
 [project.optional-dependencies]
