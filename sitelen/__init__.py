@@ -1,12 +1,13 @@
-"""waso-sona sitelen pona tokenizer."""
+"""waso-sona Latin <-> sitelen pona UCSUR translator."""
 from .glyphs import (
     CODEPOINT_TO_WORD, KU_SULI_WORDS, PU_WORDS, WORD_TO_CODEPOINT,
 )
 from .syllabify import syllabify
-from .tokenizer import SitelenTokenizer
+from .translate import latin_to_ucsur, ucsur_to_latin
 
 __all__ = [
-    "SitelenTokenizer",
+    "latin_to_ucsur",
+    "ucsur_to_latin",
     "syllabify",
     "PU_WORDS",
     "KU_SULI_WORDS",

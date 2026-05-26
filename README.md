@@ -11,11 +11,10 @@ trained locally on consumer hardware (developed on an RTX 5060, 8 GB VRAM).
 
 Current pieces:
 
-- `tokenizer/` — sitelen pona UCSUR tokenizer (syllable-aware).
+- `sitelen/` — bidirectional translator between Latin Toki Pona and
+  sitelen pona UCSUR (syllable-aware). UCSUR is handled entirely at the
+  application layer; the model itself trains and runs on Latin script.
 - `scripts/fetch_data.py` — pulls Toki Pona corpora into `data/raw/`.
-
-Next, roughly: corpus preprocessing into UCSUR token streams, then a small
-from-scratch transformer (nanoGPT-style) sized to fit on 8 GB.
 
 ## Setup
 

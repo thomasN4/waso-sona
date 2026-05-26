@@ -31,7 +31,7 @@ from typing import Callable, Iterator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
-from tokenizer.glyphs import WORD_TO_CODEPOINT  # noqa: E402
+from sitelen.glyphs import WORD_TO_CODEPOINT  # noqa: E402
 
 TP_VOCAB = set(WORD_TO_CODEPOINT)
 DATA_DIR = REPO_ROOT / "data"

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "waso-sona"
 version = "0.1.0"
-description = "Sitelen pona UCSUR tokenizer for Toki Pona."
+description = "Bidirectional translator between Latin Toki Pona and sitelen pona UCSUR."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = { file = "LICENSE" }
@@ -34,4 +34,4 @@ explicit = true
 torch = { index = "pytorch-cu128" }
 
 [tool.setuptools.packages.find]
-include = ["tokenizer*"]
+include = ["sitelen*"]

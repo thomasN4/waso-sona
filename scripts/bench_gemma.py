@@ -33,7 +33,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from tokenizer.glyphs import WORD_TO_CODEPOINT  # noqa: E402
+from sitelen.glyphs import WORD_TO_CODEPOINT  # noqa: E402
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 BENCH_DIR = REPO_ROOT / "data/bench"
