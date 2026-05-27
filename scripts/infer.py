@@ -124,9 +124,17 @@ def main(argv: list[str] | None = None) -> int:
 
     user_msg = build_user_message(args.mode, args.prompt)
     chat = [{"role": "user", "content": user_msg}]
-    input_ids = tok.apply_chat_template(
+    encoded = tok.apply_chat_template(
         chat, tokenize=True, add_generation_prompt=True, return_tensors="pt",
-    ).to(model.device)
+    )
+    # After moving vision/audio towers to CPU, model.device can point to CPU
+    # (it picks up the first param). Pin to the text embedding's actual device.
+    gen_device = model.get_input_embeddings().weight.device
+    # Newer transformers may return a BatchEncoding instead of a bare tensor.
+    if hasattr(encoded, "input_ids"):
+        input_ids = encoded["input_ids"].to(gen_device)
+    else:
+        input_ids = encoded.to(gen_device)
 
     def generate() -> str:
         with torch.no_grad():
