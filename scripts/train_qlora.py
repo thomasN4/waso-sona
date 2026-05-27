@@ -316,10 +316,18 @@ class SampleGenerationCallback(TrainerCallback):
             with torch.no_grad():
                 for i, prompt in enumerate(self.prompts):
                     chat = [{"role": "user", "content": prompt}]
-                    input_ids = self.tok.apply_chat_template(
+                    encoded = self.tok.apply_chat_template(
                         chat, tokenize=True, add_generation_prompt=True,
                         return_tensors="pt",
-                    ).to(model.device)
+                    )
+                    # See scripts/infer.py: model.device points to CPU after
+                    # the multimodal offload, and apply_chat_template returns
+                    # a BatchEncoding rather than a bare tensor.
+                    gen_device = model.get_input_embeddings().weight.device
+                    if hasattr(encoded, "input_ids"):
+                        input_ids = encoded["input_ids"].to(gen_device)
+                    else:
+                        input_ids = encoded.to(gen_device)
                     out = model.generate(
                         input_ids,
                         max_new_tokens=self.max_new_tokens,
