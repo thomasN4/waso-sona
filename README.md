@@ -4,10 +4,12 @@ A talking bird that lives in your desktop.
 
 ## Direction
 
-Working toward a small language model that understands Toki Pona written in
+Working toward a small Toki Pona language model trained locally on consumer
+hardware (developed on an RTX 5060, 8 GB VRAM). The model itself operates on
+Latin-script Toki Pona; rendering to and from
 [sitelen pona](https://en.wikipedia.org/wiki/Sitelen_Pona) via the
-[UCSUR](https://www.kreativekorp.com/ucsur/charts/sitelen.html) code points,
-trained locally on consumer hardware (developed on an RTX 5060, 8 GB VRAM).
+[UCSUR](https://www.kreativekorp.com/ucsur/charts/sitelen.html) code points is
+handled at the application layer by the translator in `sitelen/`.
 
 Current pieces:
 
