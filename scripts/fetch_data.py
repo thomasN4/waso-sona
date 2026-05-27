@@ -25,6 +25,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
@@ -184,12 +185,131 @@ def iter_tp1k(raw_dir: Path) -> Iterator[tuple[str, str]]:
             yield f"pona_corpus1000.txt:{i}", line
 
 
+# ---- tok.wikipedia.org dump -----------------------------------------------
+
+TOKWIKI_URL = (
+    "https://dumps.wikimedia.org/tokwiki/latest/"
+    "tokwiki-latest-pages-articles.xml.bz2"
+)
+
+# Minimal MediaWiki-markup stripper. Not a full parser — drops the constructs
+# that contribute the most non-Toki-Pona letters (templates, refs, link
+# targets, table syntax) and leaves the natural-language body alone.
+_WIKI_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_WIKI_REF_BLOCK_RE = re.compile(r"<ref[^>]*?>.*?</ref>", re.DOTALL | re.IGNORECASE)
+_WIKI_REF_SELF_RE = re.compile(r"<ref[^>]*?/>", re.IGNORECASE)
+_WIKI_DROP_BLOCK_RE = re.compile(
+    r"<(nowiki|gallery|math|syntaxhighlight|source|pre|code|score|timeline)"
+    r"[^>]*?>.*?</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+_WIKI_FILE_LINK_RE = re.compile(
+    r"\[\[(?:File|Image|sitelen):[^\[\]]*?(?:\[\[[^\[\]]*?\]\][^\[\]]*?)*\]\]",
+    re.IGNORECASE,
+)
+_WIKI_INTERWIKI_LINK_RE = re.compile(r"\[\[[a-z\-]{2,12}:[^\]]*?\]\]")
+_WIKI_PIPED_LINK_RE = re.compile(r"\[\[[^\[\]|]+\|([^\[\]]+)\]\]")
+_WIKI_SIMPLE_LINK_RE = re.compile(r"\[\[([^\[\]|]+)\]\]")
+_WIKI_EXT_LINK_RE = re.compile(r"\[https?://\S+\s+([^\]]+)\]")
+_WIKI_BARE_LINK_RE = re.compile(r"\[https?://\S+\]")
+_WIKI_HEADER_RE = re.compile(r"^=+\s*(.*?)\s*=+\s*$", re.MULTILINE)
+_WIKI_BOLD_ITAL_RE = re.compile(r"'{2,5}")
+_WIKI_TABLE_LINE_RE = re.compile(r"^[!|].*$", re.MULTILINE)
+_WIKI_TABLE_DELIM_RE = re.compile(r"^\{\||^\|\}|^\|-.*$", re.MULTILINE)
+_WIKI_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_WIKI_BLANKLINES_RE = re.compile(r"\n{3,}")
+
+
+def _strip_templates(text: str) -> str:
+    """Iteratively remove ``{{...}}`` blocks (templates can nest)."""
+    while True:
+        new = re.sub(r"\{\{[^{}]*?\}\}", "", text, flags=re.DOTALL)
+        if new == text:
+            return new
+        text = new
+
+
+def _strip_wikitext(text: str) -> str:
+    text = _WIKI_COMMENT_RE.sub("", text)
+    text = _WIKI_REF_BLOCK_RE.sub("", text)
+    text = _WIKI_REF_SELF_RE.sub("", text)
+    text = _WIKI_DROP_BLOCK_RE.sub("", text)
+    text = _strip_templates(text)
+    text = _WIKI_FILE_LINK_RE.sub("", text)
+    text = _WIKI_INTERWIKI_LINK_RE.sub("", text)
+    text = _WIKI_PIPED_LINK_RE.sub(r"\1", text)
+    text = _WIKI_SIMPLE_LINK_RE.sub(r"\1", text)
+    text = _WIKI_EXT_LINK_RE.sub(r"\1", text)
+    text = _WIKI_BARE_LINK_RE.sub("", text)
+    text = _WIKI_TABLE_LINE_RE.sub("", text)
+    text = _WIKI_TABLE_DELIM_RE.sub("", text)
+    text = _WIKI_HEADER_RE.sub(r"\1", text)
+    text = _WIKI_BOLD_ITAL_RE.sub("", text)
+    text = _WIKI_HTML_TAG_RE.sub("", text)
+    text = _WIKI_BLANKLINES_RE.sub("\n\n", text)
+    return text.strip()
+
+
+def fetch_tokwiki(raw_dir: Path) -> None:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    archive = raw_dir / "tokwiki-latest-pages-articles.xml.bz2"
+    _http_download(TOKWIKI_URL, archive)
+    out = raw_dir / "tokwiki-pages-articles.xml"
+    with bz2.open(archive, "rb") as src, open(out, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
+def iter_tokwiki(raw_dir: Path) -> Iterator[tuple[str, str]]:
+    path = raw_dir / "tokwiki-pages-articles.xml"
+    if not path.exists():
+        return
+    # MediaWiki dumps use a versioned XML namespace; match any.
+    ns_re = re.compile(r"^\{[^}]+\}")
+    title: str | None = None
+    ns: str | None = None
+    for event, elem in ET.iterparse(path, events=("end",)):
+        tag = ns_re.sub("", elem.tag)
+        if tag == "title":
+            title = (elem.text or "").strip()
+        elif tag == "ns":
+            ns = (elem.text or "").strip()
+        elif tag == "text":
+            # Only main namespace (0); skip Talk:, User:, Template:, etc.
+            if ns == "0" and title and elem.text:
+                if not elem.text.lstrip().upper().startswith("#REDIRECT"):
+                    body = _strip_wikitext(elem.text)
+                    if body:
+                        yield title, body
+        elif tag == "page":
+            title = None
+            ns = None
+            elem.clear()
+
+
+# ---- hecko-yes/toki-ramble ------------------------------------------------
+
+def fetch_toki_ramble(raw_dir: Path) -> None:
+    _git_clone("https://github.com/hecko-yes/toki-ramble.git", raw_dir)
+
+
+def iter_toki_ramble(raw_dir: Path) -> Iterator[tuple[str, str]]:
+    toki = raw_dir / "toki"
+    if not toki.exists():
+        return
+    for txt in sorted(toki.rglob("*.txt")):
+        body = txt.read_text(encoding="utf-8", errors="replace").strip()
+        if body:
+            yield str(txt.relative_to(raw_dir)), body
+
+
 SOURCES: dict[str, Source] = {
     "tatoeba": Source("tatoeba", fetch_tatoeba, iter_tatoeba),
     "poki": Source("poki", fetch_poki, iter_poki),
     "nltk-tp": Source("nltk-tp", fetch_nltk_tp, iter_nltk_tp),
     "lipu": Source("lipu", fetch_lipu, iter_lipu),
     "tp1k": Source("tp1k", fetch_tp1k, iter_tp1k),
+    "tokwiki": Source("tokwiki", fetch_tokwiki, iter_tokwiki),
+    "toki-ramble": Source("toki-ramble", fetch_toki_ramble, iter_toki_ramble),
 }
 
 

@@ -8,7 +8,7 @@ at the application layer.
 ```
                  fetch_data.py             filter_corpus.py
    public TP    ─────────────▶  data/raw/   ────────────────▶
-   corpora                       (5 sources)
+   corpora                       (7 sources)
 
    data/processed/corpus.jsonl        build_sft_dataset.py
    data/processed/corpus.filtered.jsonl ───────────────────▶
@@ -38,19 +38,25 @@ and out — see [`sitelen/translate.py`](sitelen/translate.py).
 
 ### 1. Fetch — `scripts/fetch_data.py`
 
-Pulls 5 Toki Pona corpora into `data/raw/<source>/` and normalizes them
+Pulls 7 Toki Pona corpora into `data/raw/<source>/` and normalizes them
 into `data/processed/corpus.jsonl` (one JSON record per document) plus
 `data/processed/sentences.txt` (deduped, sentence-split, TP-shaped lines).
 
-| Source | What it is | Cleanliness |
-|---|---|---|
-| `tatoeba` | Crowd-sourced single sentences | Clean |
-| `poki` | Long-form prose (`kulupu-lapo/poki`) | Mixed; some contamination |
-| `nltk-tp` | Older crawled corpus (`davidar/nltk-tp`) | Suspect — high non-TP letter ratio |
-| `lipu` | Parallel translation set (TP side only) | Tiny but clean |
-| `tp1k` | 1,000 hand-curated sentences | Clean |
+| Source | What it is | Docs | Chars | Cleanliness |
+|---|---|---:|---:|---|
+| `poki` | Long-form prose (`kulupu-lapo/poki`) | 1,627 | 5.66 M | Mixed; some contamination |
+| `nltk-tp` | Older crawled corpus (`davidar/nltk-tp`) | 1,825 | 4.44 M | Suspect — high non-TP letter ratio |
+| `tatoeba` | Crowd-sourced single sentences | 76,941 | 3.11 M | Clean |
+| `tokwiki` | `tok.wikipedia.org` page dump (XML, main-ns only, wikitext stripped) | 4,314 | 2.35 M | Clean; some residual `&nbsp;`/`[` artifacts caught by sentence filter |
+| `toki-ramble` | `hecko-yes/toki-ramble` free-form prose (CC0) | 8 | 19 k | Clean original writing |
+| `tp1k` | 1,000 hand-curated sentences | 400 | 18 k | Clean |
+| `lipu` | Parallel translation set (TP side only) | 13 | 154 | Tiny but clean |
 
 Stdlib only; pure download + light text normalization. Pure idempotent.
+`tokwiki` is fetched as a bz2 XML dump and parsed with `xml.etree.iterparse`;
+wikitext is stripped by a minimal regex pass (templates, refs, links,
+tables, magic words) — anything that survives but isn't TP-shaped is
+dropped downstream by `_looks_like_toki_pona`.
 
 ### 2. Filter — `scripts/filter_corpus.py`
 
