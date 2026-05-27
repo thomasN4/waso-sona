@@ -76,8 +76,8 @@ English-glossed headers in `nltk-tp`). Vocab is extended with `ali`,
 
 ### 3. SFT dataset builder — `scripts/build_sft_dataset.py`
 
-Produces `data/processed/sft_train.jsonl` (~9,300 rows) and `sft_val.jsonl`
-(~500 rows) in HF messages format. Two example types:
+Produces `data/processed/sft_train.jsonl` (~11,800 rows) and `sft_val.jsonl`
+(~630 rows) in HF messages format. Two example types:
 
 - **Continuation pairs**: split a doc chunk into a prefix (1–3 sentences,
   ≥ 5 words) and a 1–2-sentence suffix; the user message is **the exact
@@ -99,8 +99,8 @@ caps, missing-predicate check). Then dedup by response hash, then drop any
 example whose rendered chat template exceeds `--max-tokens` (default 1024).
 Split is deterministic by id-hash (`val_frac=0.05`).
 
-Token-length percentiles on a typical build: p50 = 213, p90 = 271,
-p99 = 323, max = 402.
+Token-length percentiles on a typical build: p50 = 224, p90 = 277,
+p99 = 332, max = 396.
 
 ---
 
