@@ -59,20 +59,33 @@ exceeds a threshold (default `0.05`). Writes `corpus.filtered.jsonl`. On the
 current corpora this cuts the post-tokenization UNK rate from ~13.6 % →
 ~1.0 % and trims tokens from 5.87 M → 2.54 M.
 
+Optionally also applies a sentence-level quality check (a targeted subset of
+`augment_corpus._filter_sentence` — unknown lowercase word, double `li`,
+`li e`, leading `li`, high uni/bigram repetition — but skipping length and
+missing-predicate checks that are too strict for real prose). Enable with
+`--min-sentence-pass-rate 0.5`; on the current corpora this drops an
+additional ~550 docs (mostly YAML/CSS contamination in `poki` and
+English-glossed headers in `nltk-tp`). Vocab is extended with `ali`,
+`powe`, `majuna`, `po` to avoid false positives on historical Toki Pona.
+
 ### 3. SFT dataset builder — `scripts/build_sft_dataset.py`
 
 Produces `data/processed/sft_train.jsonl` (~9,300 rows) and `sft_val.jsonl`
 (~500 rows) in HF messages format. Two example types:
 
-- **Continuation pairs** (~80 % of training signal): split a doc chunk
-  into a prefix (1–3 sentences, ≥ 5 words) and a 1–2-sentence suffix; the
-  user message is **the exact `_continuation_prompt(prefix)` shape that
-  `scripts/augment_corpus.py` will send at inference**, including the
-  same few-shot block. This keeps the model's train/inference distribution
-  aligned.
-- **Topic prompts** (~20 %): one of 10 generic instruction templates
-  ("Write a short Toki Pona story…") paired with a real chunk as the
-  response.
+- **Continuation pairs**: split a doc chunk into a prefix (1–3 sentences,
+  ≥ 5 words) and a 1–2-sentence suffix; the user message is **the exact
+  `_continuation_prompt(prefix)` shape that `scripts/augment_corpus.py`
+  will send at inference**, including the same few-shot block. This keeps
+  the model's train/inference distribution aligned.
+- **Topic prompts**: one of 10 generic instruction templates ("Write a
+  short Toki Pona story…") paired with a real chunk as the response.
+
+The intended split is ~80 % continuation / 20 % topic (`--topic-prompt-frac
+0.20`), but the realized split on the current corpora is ~56 % / 44 %.
+The skew comes from short `tatoeba` docs (avg 40 chars) failing the
+`MIN_PREFIX_WORDS=5` check for continuation pairs and falling through to
+topic prompts.
 
 Each candidate assistant response runs through `augment_corpus._filter_sentence`
 (strict: zero-tolerance non-vocab, double-`li` / `li e` rejection, repetition
@@ -161,8 +174,10 @@ load-bearing.
 
 Useful flags:
 - `--sample-gen` — on each eval, generate from a fixed prompt set and
-  write outputs to the `Text` tab in TensorBoard. Costs ~30 sec per eval
-  and a 200–500 MB KV-cache spike; off by default.
+  write outputs to the `Text` tab in TensorBoard. Off by default. Cost
+  is a 200–500 MB KV-cache spike per eval; wall time is unmeasured (the
+  callback was buggy in earlier runs and never executed end-to-end —
+  see commit `b5c69ab`).
 - `--run-dir PATH` — pin the output directory (default is auto-stamped).
 - `--max-steps N`, `--lora-r N`, `--learning-rate LR`, etc. — every
   hyperparameter is overridable.
@@ -239,16 +254,40 @@ inference; nothing else from the run dir is needed.
 
 ---
 
-## Inference path (planned, not yet built)
+## Inference
 
-The trained adapter is currently not wired into any inference script.
-The two natural endpoints:
+### Current: direct HF + PEFT — `scripts/infer.py`
 
-- **Direct HF inference** — load base + LoRA via `peft.PeftModel`, call
-  `model.generate()`. Easy but slow.
-- **Ollama via merged GGUF** — `peft` merge → `convert_hf_to_gguf` →
-  `ollama create`. Lets `scripts/augment_corpus.py` use the fine-tuned
-  model with no code changes (it already talks to Ollama).
+Loads the base Gemma 4 E2B in 4-bit nf4 (same config as training), applies
+the latest run's `final/` adapter, and generates from a seed sentence
+wrapped in the same `_continuation_prompt` / `_paraphrase_prompt` shape used
+during SFT. `--compare-base` generates with the adapter disabled too on the
+same seed for side-by-side comparison.
+
+```sh
+.venv/bin/python scripts/infer.py                       # latest adapter, default seed
+.venv/bin/python scripts/infer.py --compare-base        # adapter vs base on same seed
+.venv/bin/python scripts/infer.py --mode paraphrase --prompt "…"
+```
+
+Two implementation notes (see commits `eb4be3e`, `b5c69ab`):
+
+- Current `transformers` returns a `BatchEncoding` from `apply_chat_template(...,
+  return_tensors="pt")` rather than a bare tensor. `infer.py` unwraps it; the
+  matching pattern in `train_qlora.py`'s `SampleGenerationCallback` was
+  patched alongside.
+- After the multimodal-tower CPU offload, `model.device` resolves to CPU,
+  so input tensors are routed off the GPU and the embedding lookup errors
+  with a device mismatch. Both inference and the training callback now pin
+  to `model.get_input_embeddings().weight.device` instead.
+
+### Planned: Ollama via merged GGUF
+
+`peft` merge → `convert_hf_to_gguf` → `ollama create`. Lets
+`scripts/augment_corpus.py` use the fine-tuned model with no code changes
+(it already talks to Ollama).
+
+### Application-layer I/O
 
 Whichever endpoint, the I/O conversion is the same: feed `latin_to_ucsur`
 output to the user-facing display, accept `ucsur_to_latin` of any UCSUR
