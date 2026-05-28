@@ -138,16 +138,28 @@ run's `final/` adapter dir, so `infer.py` picks it up; only the
 showed pruning alone costs ~0.01 `eval/loss` (0.7476 → 0.7578 best,
 ~1.3 % relative), consistent across the whole curve — the kept
 embeddings were trained in the geometry of the full vocab and
-fine-tuning recovers most but not all of it. The freed headroom is
-meant to be spent on `--max-seq-length 256` and `--lora-r 32`, which
-recover that gap and then some. The existing un-pruned adapter is *not*
-compatible for production use on the pruned base (it was trained
-against full-vocab logits); always retrain.
+fine-tuning recovers most but not all of it. The existing un-pruned
+adapter is *not* compatible for production use on the pruned base (it
+was trained against full-vocab logits); always retrain.
 
-**Caveat:** `eval/loss` is computed over different softmax sizes
-(15,291 vs 262,144), so it isn't perfectly comparable across the two —
-but post-fine-tune the model assigns ~0 mass to the dropped tokens, so
-the gap is approximately fair.
+**Spending the freed headroom did *not* help here.** A bumped run on the
+pruned base (`--max-seq-length 256 --lora-r 32 --lora-alpha 64`,
+`qlora-20260528T085717Z`) fits comfortably (~1.2 GB VRAM to spare) but
+showed no quality gain: a fixed-prompt generation comparison put it on
+par with the parity and un-pruned adapters, all three limited by the
+same repetition/degeneration ceiling. A follow-up with more steps and a
+lower LR (`max_steps=6000`, `lr=1e-4`) descended *slower* toward the
+same plateau and was stopped. Takeaway: at this corpus size the
+bottleneck is data + repetition, not adapter capacity or context length,
+so the canonical pruned model is the **parity** config (seq=160, r=16).
+
+**Caveat on comparing loss across configs:** `eval/loss` is *not*
+directly comparable across runs that differ in vocab size (15,291 vs
+262,144 softmax) *or* in `max_seq_length` (different left-truncation →
+different scored tokens; the dataset's median example exceeds both 160
+and 256 tokens). The bumped run's much higher raw `eval/loss` (~1.42) is
+largely this truncation artifact, **not** a real regression — which is
+why the generation comparison, not the loss curve, is the arbiter here.
 
 ---
 
