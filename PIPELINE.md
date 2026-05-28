@@ -104,6 +104,53 @@ p99 = 332, max = 396.
 
 ---
 
+## Vocabulary pruning (optional) — `scripts/prune_vocab.py`
+
+Gemma 4's `vocab_size = 262,144` is the dominant VRAM cost on the 8 GB
+card (the embedding/`lm_head` and the logits tensor all scale with it).
+The Latin-only TP corpus touches only ~6 % of those tokens, so we can
+slice the unused rows out of `embed_tokens` (tied to `lm_head`) and
+filter the BPE tokenizer to match.
+
+`prune_vocab.py` builds the keep-set by tokenizing the filtered corpus +
+the SFT dataset (through the training chat template) + the
+`augment_corpus` inference prompts, then unions in Gemma's special
+tokens and all 256 byte-fallback tokens so any UTF-8 input still
+tokenizes. On the current corpora:
+
+| | value |
+|---|---|
+| vocab | 262,144 → **15,291** (94.2 % reduction) |
+| BPE merges | 514,906 → 23,499 (invalid ones dropped) |
+| corpus round-trip | 100 / 100 decoded identically |
+| VRAM at model load | 6.74 GB → **5.98 GB** (−760 MB) |
+
+Output lands in `data/training/base-pruned/` (a plain HF safetensors
+checkpoint + pruned tokenizer). To train against it, pass
+`--model-id data/training/base-pruned` to `train_qlora.py` — no other
+flags change, and `chunked_causal_lm_loss` reads the new `vocab_size`
+from the config automatically. The pruned tokenizer is saved into each
+run's `final/` adapter dir, so `infer.py` picks it up; only the
+`--base-model data/training/base-pruned` flag is needed at inference.
+
+**Parity cost:** retraining at identical hyperparameters
+(`qlora-20260528T022232Z` vs the un-pruned `qlora-20260527T223141Z`)
+showed pruning alone costs ~0.01 `eval/loss` (0.7476 → 0.7578 best,
+~1.3 % relative), consistent across the whole curve — the kept
+embeddings were trained in the geometry of the full vocab and
+fine-tuning recovers most but not all of it. The freed headroom is
+meant to be spent on `--max-seq-length 256` and `--lora-r 32`, which
+recover that gap and then some. The existing un-pruned adapter is *not*
+compatible for production use on the pruned base (it was trained
+against full-vocab logits); always retrain.
+
+**Caveat:** `eval/loss` is computed over different softmax sizes
+(15,291 vs 262,144), so it isn't perfectly comparable across the two —
+but post-fine-tune the model assigns ~0 mass to the dropped tokens, so
+the gap is approximately fair.
+
+---
+
 ## The sitelen translator
 
 `sitelen/` is application-layer only — never imported by `train_qlora.py`.
