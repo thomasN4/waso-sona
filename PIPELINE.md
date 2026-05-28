@@ -1,36 +1,65 @@
 # Pipeline
 
-End-to-end view of how waso-sona goes from raw Toki Pona text on the
-internet to a fine-tuned Gemma 4 adapter that speaks Toki Pona, with a
-deterministic Latin ↔ sitelen pona UCSUR translator wrapping the model
-at the application layer.
+The deliverable is a **tiny Toki Pona language model trained from scratch**,
+runnable locally on consumer hardware (developed on an RTX 5060, 8 GB VRAM).
+The obstacle is data: the real, human-written TP corpus is far too small to
+train a from-scratch LM well. So Gemma 4 is brought in as a **teacher** —
+fine-tuned on the real corpus, then used to *augment* it — and the tiny model
+is trained from scratch on the enlarged corpus.
+
+Three stages:
+
+1. **Teacher (built).** QLoRA fine-tune Gemma 4 on the real TP corpus so it
+   produces fluent, grounded Toki Pona. Most of this document details this
+   stage — fetch, filter, SFT-dataset build, optional vocab-pruning, training.
+2. **Augment (partial).** Use the fine-tuned Gemma to expand the real corpus
+   via paraphrase + continuation of real sentences → a larger
+   synthetic-but-grounded corpus.
+3. **Student (planned — the actual product).** Train the tiny TP LM **from
+   scratch** on the augmented corpus. Its architecture, tokenizer, and trainer
+   are **still TBD**.
 
 ```
-                 fetch_data.py             filter_corpus.py
-   public TP    ─────────────▶  data/raw/   ────────────────▶
-   corpora                       (7 sources)
+  Stage 1 — TEACHER (built)
+    public TP corpora
+        │  fetch_data.py
+        ▼
+    data/raw/  (7 sources)
+        │  filter_corpus.py
+        ▼
+    corpus.filtered.jsonl
+        │  build_sft_dataset.py
+        ▼
+    sft_train.jsonl / sft_val.jsonl
+        │  train_qlora.py        (optional: prune_vocab.py first)
+        ▼
+    fine-tuned Gemma 4 adapter  (data/training/runs/qlora-<UTC>/final/, ~96 MB)
 
-   data/processed/corpus.jsonl        build_sft_dataset.py
-   data/processed/corpus.filtered.jsonl ───────────────────▶
+  Stage 2 — AUGMENT (partial)
+        │  augment_corpus.py — fine-tuned Gemma paraphrases + continues real TP
+        ▼
+    augmented corpus  (real + synthetic-but-grounded TP)
 
-       data/processed/sft_train.jsonl       train_qlora.py
-       data/processed/sft_val.jsonl    ───────────────────▶
+  Stage 3 — STUDENT (planned; the deliverable)
+        │  train from scratch   [architecture / tokenizer / trainer: TBD]
+        ▼
+    tiny Toki Pona LM   ◀── the actual product
 
-                                    data/training/runs/qlora-<UTC>/final/
-                                       └── adapter_model.safetensors   (~96 MB)
-
-   ┌────────────────────────────────────────────────────────────┐
-   │  Application layer (not in training)                        │
-   │                                                             │
-   │   UCSUR input ──▶ sitelen.ucsur_to_latin ──▶  model         │
-   │                                                ▼            │
-   │   UCSUR output ◀── sitelen.latin_to_ucsur ──  Latin output  │
-   └────────────────────────────────────────────────────────────┘
+  Application layer (not in training; wraps the student model)
+    UCSUR in  ──▶ sitelen.ucsur_to_latin ──▶ tiny LM ──▶ Latin out
+    Latin out ──▶ sitelen.latin_to_ucsur ──▶ UCSUR display
 ```
 
-The model **only ever sees Latin-script Toki Pona**. UCSUR is a display
-concern handled deterministically by the `sitelen/` package on the way in
-and out — see [`sitelen/translate.py`](sitelen/translate.py).
+Every model in the pipeline — **both** the Gemma teacher and the from-scratch
+student — **only ever sees Latin-script Toki Pona**. UCSUR (sitelen pona) is a
+display concern handled deterministically by the `sitelen/` package on the way
+in and out — see [`sitelen/translate.py`](sitelen/translate.py).
+
+**Current state:** Stage 1 is built and is what the rest of this document
+describes. Stage 2 is only partially built — `augment_corpus.py` exists but
+still calls *base* Gemma over Ollama (a placeholder predating the fine-tuned
+model; see "Stage 2 serving" below). Stage 3 (the student) is not yet
+specified.
 
 ---
 
@@ -319,7 +348,11 @@ inference; nothing else from the run dir is needed.
 
 ---
 
-## Inference
+## Stage 2 serving — running the teacher for augmentation
+
+This is how the fine-tuned Gemma teacher is invoked to generate augmented
+data (Stage 2). It is *not* the deliverable's inference path — the deliverable
+is the from-scratch student model (Stage 3), not yet built.
 
 ### Current: direct HF + PEFT — `scripts/infer.py`
 
@@ -367,8 +400,14 @@ Gemma 4 variants on Toki Pona generation. Results live in
 `data/bench/` (gitignored). Not on the critical path for fine-tuning, but
 useful for sanity-checking the un-fine-tuned baseline.
 
-`scripts/augment_corpus.py` is the inference-side corpus expander that
-calls Gemma (via Ollama) to paraphrase + continue real sentences. Both
-SFT dataset prompts and the augmentation prompts come from this file's
-`_continuation_prompt` / `_paraphrase_prompt`, so the SFT data trains
-the model on exactly the shape it will be queried with later.
+`scripts/augment_corpus.py` is the **Stage 2** corpus expander: it paraphrases
++ continues real sentences to grow the corpus that will train the from-scratch
+student. The teacher's SFT prompts and these augmentation prompts both come
+from this file's `_continuation_prompt` / `_paraphrase_prompt`, so the teacher
+is fine-tuned on exactly the shape it's queried with during augmentation.
+
+**Caveat:** `augment_corpus.py` currently calls *base* Gemma over Ollama — a
+placeholder predating the fine-tuned model. To actually use the teacher it
+must either move to the HF + PEFT path (`infer.py`-style) or be served the
+merged-GGUF adapter via Ollama (see "Stage 2 serving"). Until then its output
+is base-Gemma quality, not teacher quality.
