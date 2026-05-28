@@ -2,6 +2,11 @@
 
 A talking bird that lives in your desktop.
 
+> **Note:** This README is out of date — it predates the teacher→student
+> architecture and most of the current tooling. See
+> [`PIPELINE.md`](PIPELINE.md) for the accurate, current design; this file
+> will be brought back in line later.
+
 ## Direction
 
 Working toward a small Toki Pona language model trained locally on consumer
