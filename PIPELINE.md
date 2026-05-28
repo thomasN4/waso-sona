@@ -379,11 +379,35 @@ Two implementation notes (see commits `eb4be3e`, `b5c69ab`):
   with a device mismatch. Both inference and the training callback now pin
   to `model.get_input_embeddings().weight.device` instead.
 
-### Planned: Ollama via merged GGUF
+### Ollama via merged GGUF (built — the chosen serving path)
 
-`peft` merge → `convert_hf_to_gguf` → `ollama create`. Lets
-`scripts/augment_corpus.py` use the fine-tuned model with no code changes
-(it already talks to Ollama).
+`scripts/merge_adapter.py` (peft `merge_and_unload`) → llama.cpp
+`convert_hf_to_gguf.py --outtype q8_0` → `ollama create`. The merged
+tokenizer + `MINIMAL_CHAT_TEMPLATE` carry into the GGUF metadata, so Ollama
+applies the correct chat template automatically; query via `/api/chat`. This
+is fast enough for bulk Stage-2 generation (HF + 4-bit single-stream was too
+slow for the ~10⁸ tokens the student needs).
+
+Notes from building it:
+- **Gemma 4 is supported** by current llama.cpp (`conversion/gemma.py`
+  registers `Gemma4ForConditionalGeneration`); the text model converts and the
+  vision/audio towers are dropped (text-only GGUF).
+- **The pruned models convert fine too** — the converter reads `tokenizer.json`
+  via `LlamaHfVocab` (Gemma 4 ships no `tokenizer.model`), so the filtered
+  pruned vocab is no obstacle.
+
+**Teacher selection (2026-05-28).** All three fine-tunes were merged → GGUF →
+served, then compared on ~10k tokens of continuation generation
+(`scripts/bench_gguf.py`, temp=0.8). Validity was uniformly high (95–96 %
+strict-valid); diversity (distinct-2) ranked **baseline 0.61 ≥ parity 0.58 >
+bumped 0.50**. The pruned-`parity` diversity edge seen in the earlier HF bench
+(0.72) did **not** reproduce here — it was noise. So the **un-pruned baseline
+fine-tune (`qlora-20260527T223141Z`) is the teacher** (`ollama` model
+`waso-baseline`): marginally most diverse, standard full vocab, no pruned-base
+dependency. Pruning gave no serving or robust diversity benefit.
+
+`scripts/augment_corpus.py` will use this via `--model waso-baseline` (and
+gains `repeat_penalty`/`repeat_last_n` in the upcoming repetition-control work).
 
 ### Application-layer I/O
 
