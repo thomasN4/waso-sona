@@ -429,8 +429,11 @@ useful for sanity-checking the un-fine-tuned baseline.
 student. It now generates from the teacher (`--model waso-baseline`, default)
 via Ollama `/api/chat` — using the chat endpoint is required so the teacher's
 training chat template wraps the prompt. The teacher's SFT prompts and these
-augmentation prompts both come from `_continuation_prompt` / `_paraphrase_prompt`,
-so the teacher is fine-tuned on the same shape it's queried with. A global
+augmentation prompts share the **continuation** shape (`_continuation_prompt`),
+so for continuations the teacher is queried in exactly the shape it was
+fine-tuned on. `_paraphrase_prompt` is **inference-only** — it was never in the
+SFT data (`build_sft_dataset.py` emits only `continuation` + `topic` modes),
+which is why paraphrase output drifts (see below). A global
 cross-seed / cross-run dedup (lowercased text) keeps the student corpus
 duplicate-free; per-seed dedup + `_filter_sentence` still run first.
 
