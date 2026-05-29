@@ -34,7 +34,7 @@ DEFAULT_MODELS = ["waso-baseline", "waso-parity", "waso-bumped"]
 
 
 def chat(model: str, prompt: str, num_predict: int, temperature: float,
-         seed: int) -> tuple[str, int]:
+         seed: int, repeat_penalty: float, repeat_last_n: int) -> tuple[str, int]:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -46,6 +46,8 @@ def chat(model: str, prompt: str, num_predict: int, temperature: float,
             "temperature": temperature,
             "top_p": 0.95,
             "seed": seed,
+            "repeat_penalty": repeat_penalty,
+            "repeat_last_n": repeat_last_n,
         },
     }
     req = urllib.request.Request(
@@ -63,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target-tokens", type=int, default=10000)
     ap.add_argument("--num-predict", type=int, default=128)
     ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--repeat-penalty", type=float, default=1.1,
+                    help="Ollama repeat_penalty (default 1.1 = Ollama default; 1.0 = off)")
+    ap.add_argument("--repeat-last-n", type=int, default=64,
+                    help="Ollama repeat_last_n window (default 64; -1 = full ctx, 0 = off)")
     args = ap.parse_args(argv)
 
     BENCH_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,7 +84,9 @@ def main(argv: list[str] | None = None) -> int:
             seed = SEEDS[i % len(SEEDS)]
             prompt = augment_corpus._continuation_prompt(seed)
             try:
-                out, n = chat(model, prompt, args.num_predict, args.temperature, seed=i)
+                out, n = chat(model, prompt, args.num_predict, args.temperature,
+                              seed=i, repeat_penalty=args.repeat_penalty,
+                              repeat_last_n=args.repeat_last_n)
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 print(f"  ! error: {e}", file=sys.stderr)
                 break
@@ -102,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     (BENCH_DIR / "gguf_summary.json").write_text(json.dumps(summary, indent=2))
 
     print("\n" + "=" * 64)
+    print(f"settings: temp={args.temperature} repeat_penalty={args.repeat_penalty} "
+          f"repeat_last_n={args.repeat_last_n}")
     print("distinct-n: higher = less repetition (1.0 = no repeats)")
     hdr = ("model", "tokens", "doc_keep", "sent_keep", "strict", "d-1", "d-2", "d-3", "avg_w")
     print("  " + " ".join(f"{h:>11}" for h in hdr))

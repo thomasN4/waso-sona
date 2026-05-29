@@ -426,12 +426,30 @@ useful for sanity-checking the un-fine-tuned baseline.
 
 `scripts/augment_corpus.py` is the **Stage 2** corpus expander: it paraphrases
 + continues real sentences to grow the corpus that will train the from-scratch
-student. The teacher's SFT prompts and these augmentation prompts both come
-from this file's `_continuation_prompt` / `_paraphrase_prompt`, so the teacher
-is fine-tuned on exactly the shape it's queried with during augmentation.
+student. It now generates from the teacher (`--model waso-baseline`, default)
+via Ollama `/api/chat` — using the chat endpoint is required so the teacher's
+training chat template wraps the prompt. The teacher's SFT prompts and these
+augmentation prompts both come from `_continuation_prompt` / `_paraphrase_prompt`,
+so the teacher is fine-tuned on the same shape it's queried with. A global
+cross-seed / cross-run dedup (lowercased text) keeps the student corpus
+duplicate-free; per-seed dedup + `_filter_sentence` still run first.
 
-**Caveat:** `augment_corpus.py` currently calls *base* Gemma over Ollama — a
-placeholder predating the fine-tuned model. To actually use the teacher it
-must either move to the HF + PEFT path (`infer.py`-style) or be served the
-merged-GGUF adapter via Ollama (see "Stage 2 serving"). Until then its output
-is base-Gemma quality, not teacher quality.
+### Decoding / repetition findings (2026-05-28)
+- **Sampling, not penalties, is the repetition fix.** Greedy decoding loops
+  catastrophically (distinct-1 ≈ 0.10); temp=0.8 sampling already lifts it to
+  distinct-2 ≈ 0.60. Sweeping Ollama `repeat_penalty` (1.0→1.5) and
+  `repeat_last_n` (64/256/full) on `waso-baseline` moved distinct-n by ≤0.01
+  and left validity at ~96 % — i.e. **negligible**. The residual repetition is
+  TP's natural function-word density (`li e pi la mi`…), which penalties can't
+  remove without breaking grammar. The knobs are exposed (`--repeat-penalty`,
+  `--repeat-last-n`) but default to Ollama's 1.1/64; raising them isn't worth it.
+- **Paraphrase mode drifts in meaning.** The teacher was SFT'd on continuation
+  + topic prompts, never an explicit paraphrase task, so `_paraphrase_prompt`
+  yields grammatical-but-unfaithful TP (e.g. `moku li pona.` → `jan lawa li
+  pali e ni`). Continuations are more faithful. For training a from-scratch
+  student this is tolerable (it's still diverse valid TP), but "paraphrase" is
+  effectively "generate a related TP sentence." Revisit if the student needs
+  meaning-grounded augmentation.
+
+Throughput: ~120 tok/s on the RTX 5060 via Ollama (q8_0), vs ~15–30 tok/s for
+the HF + 4-bit path — the reason bulk augmentation goes through GGUF/Ollama.

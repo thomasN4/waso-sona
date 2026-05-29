@@ -29,7 +29,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from sitelen.glyphs import WORD_TO_CODEPOINT  # noqa: E402
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+DEFAULT_MODEL = "waso-baseline"
 DEFAULT_INPUT = REPO_ROOT / "data" / "processed" / "sentences.txt"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "processed" / "synthetic.jsonl"
 
@@ -144,27 +145,43 @@ def _filter_sentence(sentence: str) -> tuple[bool, str]:
 # Ollama HTTP helper
 # ---------------------------------------------------------------------------
 
-def _ollama_generate(prompt: str, model: str, max_tokens: int) -> tuple[str, int]:
-    """POST to Ollama /api/generate. Returns (response_text, eval_count)."""
+def _ollama_generate(
+    prompt: str, model: str, max_tokens: int,
+    repeat_penalty: float, repeat_last_n: int,
+) -> tuple[str, int]:
+    """POST to Ollama /api/chat. Returns (response_text, eval_count).
+
+    Uses /api/chat (not /api/generate) so the fine-tuned teacher's chat
+    template (carried into the GGUF) wraps the prompt the same way it was
+    trained — `_continuation_prompt`/`_paraphrase_prompt` are the user turn.
+    A raw /api/generate prompt would skip the `<|turn>` markers and put the
+    model off its training distribution.
+    """
     payload = json.dumps({
         "model": model,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "think": False,
         "keep_alive": "10m",
-        # Gemma 4's default of 1.0 drifts off the seed too easily; 0.8
-        # matches the temperature used in scripts/bench_gemma.py.
-        "options": {"num_predict": max_tokens, "temperature": 0.8},
+        # temp=0.8 is the real repetition fix (greedy loops badly); the
+        # repeat_* knobs are exposed but had negligible effect at this temp
+        # on TP (its tiny vocab forces grammatical function-word reuse).
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": 0.8,
+            "repeat_penalty": repeat_penalty,
+            "repeat_last_n": repeat_last_n,
+        },
     }).encode()
     req = urllib.request.Request(
-        OLLAMA_URL,
+        OLLAMA_CHAT_URL,
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=180) as resp:
         data = json.loads(resp.read())
-    text = data.get("response", "").strip()
+    text = data.get("message", {}).get("content", "").strip()
     eval_count = data.get("eval_count", 0)
     return text, eval_count
 
@@ -185,6 +202,8 @@ def _process_seed(
     paraphrase_n: int,
     continuation_n: int,
     max_tokens: int,
+    repeat_penalty: float,
+    repeat_last_n: int,
 ) -> tuple[list[dict], collections.Counter, int]:
     """Generate, filter, and return records for one seed.
 
@@ -218,7 +237,8 @@ def _process_seed(
     # --- paraphrase attempts ---
     for _ in range(paraphrase_n):
         try:
-            text, toks = _ollama_generate(_paraphrase_prompt(seed), model, max_tokens)
+            text, toks = _ollama_generate(_paraphrase_prompt(seed), model, max_tokens,
+                                          repeat_penalty, repeat_last_n)
             total_tokens += toks
             for sent in _split_into_sentences(text)[:1]:
                 _consider(sent, "paraphrase", 1)
@@ -229,7 +249,8 @@ def _process_seed(
     # --- continuation attempts ---
     for _ in range(continuation_n):
         try:
-            text, toks = _ollama_generate(_continuation_prompt(seed), model, max_tokens)
+            text, toks = _ollama_generate(_continuation_prompt(seed), model, max_tokens,
+                                          repeat_penalty, repeat_last_n)
             total_tokens += toks
             for sent in _split_into_sentences(text)[:2]:
                 _consider(sent, "continuation", 2)
@@ -248,11 +269,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Augment Toki Pona corpus via Ollama/Gemma paraphrase+continuation."
     )
-    parser.add_argument("--model", default="gemma4:e2b")
+    parser.add_argument("--model", default=DEFAULT_MODEL,
+                        help=f"Ollama model — the fine-tuned teacher (default {DEFAULT_MODEL})")
     parser.add_argument("--paraphrase-n", type=int, default=5,
                         help="Paraphrase attempts per seed (default 5)")
     parser.add_argument("--continuation-n", type=int, default=3,
                         help="Continuation attempts per seed (default 3)")
+    parser.add_argument("--repeat-penalty", type=float, default=1.1,
+                        help="Ollama repeat_penalty (default 1.1; tuning showed "
+                             "negligible effect on TP at temp 0.8)")
+    parser.add_argument("--repeat-last-n", type=int, default=64,
+                        help="Ollama repeat_last_n window (default 64)")
     parser.add_argument("--concurrency", type=int, default=2,
                         help="ThreadPoolExecutor max_workers (default 2)")
     parser.add_argument("--max-seeds", type=int, default=None,
@@ -305,11 +332,25 @@ def main() -> None:
         print("Nothing to do — re-running is a no-op.")
         return
 
+    # Global cross-seed / cross-run dedup: the teacher re-emits the same
+    # sentence across different seeds, and re-runs append. Preload every text
+    # already in the output so the student corpus stays duplicate-free.
+    global_seen: set[str] = set()
+    if output_path.exists():
+        with output_path.open(encoding="utf-8") as fh:
+            for raw in fh:
+                try:
+                    global_seen.add(json.loads(raw)["text"].lower().strip())
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    print(f"Preloaded {len(global_seen)} existing texts for global dedup.")
+
     # Aggregate stats (updated from each future's result in the main thread)
     global_rejects: collections.Counter = collections.Counter()
     total_accepted = 0
     total_candidates = 0
     total_tokens = 0
+    global_dups = 0
     start = time.monotonic()
 
     out_fh = output_path.open("a", encoding="utf-8")
@@ -322,6 +363,8 @@ def main() -> None:
             paraphrase_n=args.paraphrase_n,
             continuation_n=args.continuation_n,
             max_tokens=args.limit_output_tokens,
+            repeat_penalty=args.repeat_penalty,
+            repeat_last_n=args.repeat_last_n,
         )
 
     n_done = 0
@@ -336,14 +379,21 @@ def main() -> None:
                 print(f"  FATAL error for seed {seed!r}: {exc}", file=sys.stderr)
                 records, rejects, toks = [], collections.Counter({"exception": 1}), 0
 
+            kept = 0
             for rec in records:
+                key = rec["text"].lower().strip()
+                if key in global_seen:
+                    global_dups += 1
+                    continue
+                global_seen.add(key)
                 out_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                kept += 1
             out_fh.flush()
             done_fh.write(seed + "\n")
             done_fh.flush()
 
             n_cands = sum(rejects.values()) + len(records)
-            total_accepted += len(records)
+            total_accepted += kept
             total_candidates += n_cands
             total_tokens += toks
             global_rejects.update(rejects)
@@ -352,7 +402,7 @@ def main() -> None:
             rate = total_tokens / elapsed if elapsed > 0 else 0.0
             print(
                 f"[{n_done}/{len(remaining)}] "
-                f"seed_accepted={len(records)} cands={n_cands} "
+                f"kept={kept} cands={n_cands} "
                 f"tok/s={rate:.1f}  {seed[:70]!r}"
             )
 
@@ -365,7 +415,8 @@ def main() -> None:
     print("\n=== Augmentation summary ===")
     print(f"  Seeds processed:      {len(remaining)}")
     print(f"  Candidates generated: {total_candidates}")
-    print(f"  Accepted:             {total_accepted}")
+    print(f"  Accepted (written):   {total_accepted}")
+    print(f"  Global dups dropped:  {global_dups}")
     pct = total_accepted / max(total_candidates, 1) * 100
     print(f"  Accept rate:          {pct:.1f}%")
     print(f"  Total tokens:         {total_tokens}")
