@@ -105,8 +105,8 @@ English-glossed headers in `nltk-tp`). Vocab is extended with `ali`,
 
 ### 3. SFT dataset builder — `scripts/build_sft_dataset.py`
 
-Produces `data/processed/sft_train.jsonl` (~11,800 rows) and `sft_val.jsonl`
-(~630 rows) in HF messages format. Two example types:
+Produces `data/processed/sft_train.jsonl` (~21,200 rows) and `sft_val.jsonl`
+(~1,140 rows) in HF messages format. Three example modes:
 
 - **Continuation pairs**: split a doc chunk into a prefix (1–3 sentences,
   ≥ 5 words) and a 1–2-sentence suffix; the user message is **the exact
@@ -115,21 +115,23 @@ Produces `data/processed/sft_train.jsonl` (~11,800 rows) and `sft_val.jsonl`
   the model's train/inference distribution aligned.
 - **Topic prompts**: one of 10 generic instruction templates ("Write a
   short Toki Pona story…") paired with a real chunk as the response.
+- **Paraphrase pairs**: `_paraphrase_prompt(a)` → `b`, where `(a, b)` are
+  TP sentences sharing an English Tatoeba translation
+  (`scripts/build_paraphrase_pairs.py` → `paraphrase_pairs.jsonl`, ~11.7k
+  ordered pairs). See the paraphrase caveat under "Stage 2 serving" — this
+  mode trains, but faithful paraphrasing did **not** materialize.
 
-The intended split is ~80 % continuation / 20 % topic (`--topic-prompt-frac
-0.20`), but the realized split on the current corpora is ~56 % / 44 %.
-The skew comes from short `tatoeba` docs (avg 40 chars) failing the
-`MIN_PREFIX_WORDS=5` check for continuation pairs and falling through to
-topic prompts.
+Realized mode counts on the current corpora: ~7,980 continuation / ~4,440
+topic / ~9,950 paraphrase. Each candidate response runs through
+`augment_corpus._filter_sentence` (strict: zero-tolerance non-vocab,
+double-`li` / `li e` rejection, repetition caps, missing-predicate check).
+Dedup is mode-aware: paraphrase keys on `(prompt, response)` (clusters reuse
+a target across sources), others on response only. Then drop any example
+over `--max-tokens` (default 1024). Split is deterministic by id-hash
+(`val_frac=0.05`).
 
-Each candidate assistant response runs through `augment_corpus._filter_sentence`
-(strict: zero-tolerance non-vocab, double-`li` / `li e` rejection, repetition
-caps, missing-predicate check). Then dedup by response hash, then drop any
-example whose rendered chat template exceeds `--max-tokens` (default 1024).
-Split is deterministic by id-hash (`val_frac=0.05`).
-
-Token-length percentiles on a typical build: p50 = 224, p90 = 277,
-p99 = 332, max = 396.
+Token-length percentiles on a typical build: p50 = 215, p90 = 263,
+p99 = 319, max = 396.
 
 ---
 
@@ -406,8 +408,13 @@ fine-tune (`qlora-20260527T223141Z`) is the teacher** (`ollama` model
 `waso-baseline`): marginally most diverse, standard full vocab, no pruned-base
 dependency. Pruning gave no serving or robust diversity benefit.
 
-`scripts/augment_corpus.py` will use this via `--model waso-baseline` (and
-gains `repeat_penalty`/`repeat_last_n` in the upcoming repetition-control work).
+**Superseded by the multi-task teacher (`waso-teacher`, 2026-05-29).** To add
+paraphrasing, the SFT was extended with a `paraphrase` mode (Tatoeba sibling
+pairs) and retrained on stock Gemma 4 → merged → `ollama` model `waso-teacher`.
+Continuation quality is **unchanged** vs `waso-baseline` (bench_gguf: d-2 0.60
+vs 0.61, strict 96 % both — multi-task didn't hurt it). Faithful paraphrasing,
+however, did **not** materialize (see caveat below). `waso-teacher` is the
+current `augment_corpus.py` default; `waso-baseline` remains as a fallback.
 
 ### Application-layer I/O
 
@@ -426,16 +433,12 @@ useful for sanity-checking the un-fine-tuned baseline.
 
 `scripts/augment_corpus.py` is the **Stage 2** corpus expander: it paraphrases
 + continues real sentences to grow the corpus that will train the from-scratch
-student. It now generates from the teacher (`--model waso-baseline`, default)
-via Ollama `/api/chat` — using the chat endpoint is required so the teacher's
-training chat template wraps the prompt. The teacher's SFT prompts and these
-augmentation prompts share the **continuation** shape (`_continuation_prompt`),
-so for continuations the teacher is queried in exactly the shape it was
-fine-tuned on. `_paraphrase_prompt` is **inference-only** — it was never in the
-SFT data (`build_sft_dataset.py` emits only `continuation` + `topic` modes),
-which is why paraphrase output drifts (see below). A global
-cross-seed / cross-run dedup (lowercased text) keeps the student corpus
-duplicate-free; per-seed dedup + `_filter_sentence` still run first.
+student. It generates from the teacher (`--model waso-teacher`, default) via
+Ollama `/api/chat` — the chat endpoint is required so the teacher's training
+chat template wraps the prompt. Both `_continuation_prompt` and
+`_paraphrase_prompt` are now in the teacher's SFT, so train == inference for
+both modes. A global cross-seed / cross-run dedup (lowercased text) keeps the
+student corpus duplicate-free; per-seed dedup + `_filter_sentence` run first.
 
 ### Decoding / repetition findings (2026-05-28)
 - **Sampling, not penalties, is the repetition fix.** Greedy decoding loops
@@ -446,13 +449,19 @@ duplicate-free; per-seed dedup + `_filter_sentence` still run first.
   TP's natural function-word density (`li e pi la mi`…), which penalties can't
   remove without breaking grammar. The knobs are exposed (`--repeat-penalty`,
   `--repeat-last-n`) but default to Ollama's 1.1/64; raising them isn't worth it.
-- **Paraphrase mode drifts in meaning.** The teacher was SFT'd on continuation
-  + topic prompts, never an explicit paraphrase task, so `_paraphrase_prompt`
-  yields grammatical-but-unfaithful TP (e.g. `moku li pona.` → `jan lawa li
-  pali e ni`). Continuations are more faithful. For training a from-scratch
-  student this is tolerable (it's still diverse valid TP), but "paraphrase" is
-  effectively "generate a related TP sentence." Revisit if the student needs
-  meaning-grounded augmentation.
+- **Faithful paraphrasing did not materialize (2026-05-29).** Two SFT
+  iterations were tried — paraphrase pairs with a generic few-shot, then with a
+  task-demonstrating (A→B) few-shot (`PARAPHRASE_FEWSHOT`). Neither produced
+  reliable paraphrases: at temp=0.5 on content-rich seeds, output mostly drifts
+  to unrelated TP, sometimes copies the input or flips a negation. Root cause:
+  the Tatoeba signal is loose — "two TP sentences sharing an English
+  translation" is weak equivalence, so ~10k noisy A→B mappings teach "emit some
+  plausible TP," not a faithful rewrite (a strong capability a 2B QLoRA-r16
+  model doesn't acquire from this). **It's tolerable anyway:** the output is
+  still valid grammatical TP (passes `_filter_sentence`), so as student-corpus
+  material it's "extra related valid TP," just not meaning-grounded
+  multiplication. Continuation is unaffected. Revisit only if the student turns
+  out to need tight paraphrase grounding (would need cleaner pair data).
 
 Throughput: ~120 tok/s on the RTX 5060 via Ollama (q8_0), vs ~15–30 tok/s for
 the HF + 4-bit path — the reason bulk augmentation goes through GGUF/Ollama.

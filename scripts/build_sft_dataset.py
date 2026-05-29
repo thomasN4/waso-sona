@@ -46,6 +46,7 @@ import augment_corpus  # noqa: E402
 DEFAULT_INPUT = REPO_ROOT / "data" / "processed" / "corpus.filtered.jsonl"
 DEFAULT_OUT_TRAIN = REPO_ROOT / "data" / "processed" / "sft_train.jsonl"
 DEFAULT_OUT_VAL = REPO_ROOT / "data" / "processed" / "sft_val.jsonl"
+DEFAULT_PARAPHRASE_PAIRS = REPO_ROOT / "data" / "processed" / "paraphrase_pairs.jsonl"
 MODEL_ID = "google/gemma-4-E2B-it"
 
 # Copied from scripts/fetch_data.py:201 — sentence-final punctuation OR newline.
@@ -186,6 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-tatoeba", type=int, default=20000,
                     help="cap tatoeba random sample (default 20000)")
+    ap.add_argument("--paraphrase-pairs", type=Path, default=DEFAULT_PARAPHRASE_PAIRS,
+                    help="JSONL of {a,b} TP paraphrase pairs (build_paraphrase_pairs.py)")
+    ap.add_argument("--max-paraphrase", type=int, default=None,
+                    help="cap paraphrase examples added (default: all)")
     ap.add_argument("--topic-prompt-frac", type=float, default=0.20,
                     help="probability a chunk becomes a topic-prompt example (default 0.20)")
     ap.add_argument("--limit", type=int, default=None,
@@ -257,6 +262,32 @@ def main(argv: list[str] | None = None) -> int:
                     {"role": "assistant", "content": suffix},
                 ],
             })
+    # ---- paraphrase examples (3rd mode) ----
+    # TP paraphrase pairs (Tatoeba clusters, build_paraphrase_pairs.py). The
+    # user message is the exact inference shape (_paraphrase_prompt); the
+    # response is the sibling sentence. Added directly (bypass doc balancing).
+    if args.paraphrase_pairs.exists():
+        pairs = [json.loads(ln) for ln in
+                 args.paraphrase_pairs.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        rng.shuffle(pairs)
+        if args.max_paraphrase:
+            pairs = pairs[: args.max_paraphrase]
+        for p in pairs:
+            examples.append({
+                "source": "paraphrase",
+                "id": str(p.get("eng_id", "")),
+                "mode": "paraphrase",
+                "messages": [
+                    {"role": "user",
+                     "content": augment_corpus._paraphrase_prompt(p["a"])},
+                    {"role": "assistant", "content": p["b"]},
+                ],
+            })
+        print(f"  added {len(pairs)} paraphrase pairs", flush=True)
+    else:
+        print(f"  (no paraphrase pairs at {args.paraphrase_pairs}; skipping)",
+              flush=True)
+
     print(f"\nRaw examples: {len(examples)}", flush=True)
     print(f"  chunks per source: {dict(chunks_by_source)}", flush=True)
 
@@ -289,7 +320,14 @@ def main(argv: list[str] | None = None) -> int:
     seen: set[str] = set()
     deduped: list[dict] = []
     for ex in filtered:
-        key = dedup_key(ex["messages"][1]["content"])
+        # Mode-aware: paraphrase clusters reuse the same target across
+        # different sources, so dedup on (prompt, response) to keep distinct
+        # a→b pairs. Continuation/topic stay response-only (unchanged).
+        if ex["mode"] == "paraphrase":
+            key = dedup_key(ex["messages"][0]["content"] + "␟"
+                            + ex["messages"][1]["content"])
+        else:
+            key = dedup_key(ex["messages"][1]["content"])
         if key in seen:
             continue
         seen.add(key)

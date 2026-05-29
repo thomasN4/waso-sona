@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from sitelen.glyphs import WORD_TO_CODEPOINT  # noqa: E402
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "waso-baseline"
+DEFAULT_MODEL = "waso-teacher"
 DEFAULT_INPUT = REPO_ROOT / "data" / "processed" / "sentences.txt"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "processed" / "synthetic.jsonl"
 
@@ -46,6 +46,17 @@ FEWSHOT_EXAMPLES = [
     "taso mi pilin pona. ma li kama pona tan telo sewi.",
 ]
 
+# Task-demonstrating few-shot for paraphrasing: real Tatoeba sibling pairs
+# (same English translation) showing structural rewrites — la-fronting↔tawa,
+# la-time↔lon-time, negated-question↔anu-question. The model paraphrases far
+# more faithfully when the prompt shows the *task* (A→B) rather than generic
+# prose; this list is the in-prompt demonstration and matches the SFT prompt.
+PARAPHRASE_FEWSHOT = [
+    ("mi la sitelen esun li ike.", "sitelen esun li ike tawa mi."),
+    ("tenpo ni la mi wile tawa weka.", "mi wile weka lon tenpo ni."),
+    ("mi ken ala ken open e lupa lili?", "mi ken open e lupa lili anu seme?"),
+]
+
 _WORD_RE = re.compile(r"[A-Za-z]+")
 
 
@@ -57,11 +68,16 @@ def _fewshot_block() -> str:
     return "\n".join(f"- {ex}" for ex in FEWSHOT_EXAMPLES)
 
 
+def _paraphrase_fewshot_block() -> str:
+    return "\n".join(f"- {a} → {b}" for a, b in PARAPHRASE_FEWSHOT)
+
+
 def _paraphrase_prompt(seed: str) -> str:
     return (
-        "You are an assistant who writes natural Toki Pona prose. "
+        "You are an assistant who paraphrases Toki Pona. "
         "Output only Toki Pona text — no English, no markdown, no labels.\n\n"
-        f"Here are examples of natural Toki Pona:\n{_fewshot_block()}\n\n"
+        "Here are examples of paraphrasing — same meaning, different words "
+        f"(original → paraphrase):\n{_paraphrase_fewshot_block()}\n\n"
         "Write one paraphrase of the following Toki Pona sentence, "
         "keeping the same meaning but using different words:\n"
         f"{seed}\n\n"
