@@ -40,8 +40,9 @@ Three stages:
         ▼
     augmented corpus  (real + synthetic-but-grounded TP)
 
-  Stage 3 — STUDENT (planned; the deliverable)
-        │  train from scratch   [architecture / tokenizer / trainer: TBD]
+  Stage 3 — STUDENT (built; the deliverable)
+        │  train_tokenizer.py (SP BPE, vocab 2048)  →  spm.model
+        │  train_student.py   (nanoGPT-style decoder, ~5M params)
         ▼
     tiny Toki Pona LM   ◀── the actual product
 
@@ -55,11 +56,13 @@ student — **only ever sees Latin-script Toki Pona**. UCSUR (sitelen pona) is a
 display concern handled deterministically by the `sitelen/` package on the way
 in and out — see [`sitelen/translate.py`](sitelen/translate.py).
 
-**Current state:** Stage 1 is built and is what the rest of this document
-describes. Stage 2 is only partially built — `augment_corpus.py` exists but
-still calls *base* Gemma over Ollama (a placeholder predating the fine-tuned
-model; see "Stage 2 serving" below). Stage 3 (the student) is not yet
-specified.
+**Current state:** All three stages are built. Stage 1 (the QLoRA teacher) is
+documented across the "Data sources / preprocessing" and "Training:
+train_qlora.py" sections. Stage 2 (`augment_corpus.py` → `waso-teacher` over
+Ollama with global dedup) is in "Stage 2 serving" + the bench reference.
+Stage 3 (`train_tokenizer.py`, `train_student.py`, `talk_to_student.py` — the
+deliverable) is in "Stage 3 — Student". A 30k-seed bulk augmentation is in
+flight; full student training waits for it.
 
 ---
 
@@ -465,3 +468,54 @@ student corpus duplicate-free; per-seed dedup + `_filter_sentence` run first.
 
 Throughput: ~120 tok/s on the RTX 5060 via Ollama (q8_0), vs ~15–30 tok/s for
 the HF + 4-bit path — the reason bulk augmentation goes through GGUF/Ollama.
+
+---
+
+## Stage 3 — Student (from-scratch tiny TP LM, the deliverable)
+
+The actual product. A nanoGPT-style decoder-only transformer trained
+**from scratch** on the augmented corpus produced by Stage 2 — small enough
+to run locally on consumer hardware, focused entirely on Toki Pona.
+
+Three scripts:
+
+### `scripts/train_tokenizer.py`
+Trains a small **SentencePiece BPE** tokenizer (vocab=2,048, byte-fallback
+on) over `synthetic.jsonl` + a chars-capped slice of `corpus.filtered.jsonl`.
+Output → `data/training/student_tokenizer/spm.{model,vocab}`. On the current
+data: ~1.15 tokens/word for known TP, byte-fallback for arbitrary names.
+Special-token IDs: `<pad>=0 <unk>=1 <bos>=2 <eos>=3`.
+
+### `scripts/train_student.py`
+Minimal PyTorch training loop (no HF Trainer — from-scratch training has
+different needs than the QLoRA teacher path: no quantization, no chat
+template, no adapter merge). Defaults: **~5M params** (6 layers × 256 hidden
+× 4 heads × 512 context), bf16 on CUDA, AdamW with warmup + cosine LR,
+gradient clipping. Records are framed with `<bos>…<eos>` and concatenated
+into a token stream; batches sample random `block_size` windows.
+
+Eval has **two signals**:
+- `eval/syn_loss` — held-out 5% of synthetic (matches train distribution).
+- `eval/real_loss` — held-out slice of the real filtered corpus (the
+  *honest* signal — real_loss > syn_loss confirms the model is fitting
+  teacher distribution faithfully but tells us how it transfers to actual TP).
+
+Periodic sample generation (logged to TensorBoard `sample` text tag) +
+checkpoint saving (`best.pt` by syn_val, `last.pt`, `final.pt`). `--smoke`
+runs 100 steps with a tiny config for sanity checking.
+
+### `scripts/talk_to_student.py`
+Inference. Loads the latest `best.pt` by default + the SP tokenizer,
+generates from a Latin-TP prompt (or just `<bos>`), and with `--ucsur`
+renders the output through `sitelen.translate.latin_to_ucsur` for sitelen
+pona display. The student itself only ever sees Latin script; UCSUR is the
+application layer wrapping it, exactly as the diagram in the intro shows.
+
+### Status
+All three scripts exist and a CPU smoke train of `train_student.py` passes
+end-to-end (loss descends, eval + sample-gen + checkpoint all work). The
+real training run waits on the in-flight 30k-seed bulk augmentation
+(~25 M tokens target). Once `synthetic.jsonl` is full, the sequence is:
+re-run `train_tokenizer.py` over the bigger corpus → run `train_student.py`
+(~20k steps, plausibly an hour or two on the RTX 5060) → eyeball
+generations via `talk_to_student.py`.
