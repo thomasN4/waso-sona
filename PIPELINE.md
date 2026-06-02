@@ -61,8 +61,9 @@ documented across the "Data sources / preprocessing" and "Training:
 train_qlora.py" sections. Stage 2 (`augment_corpus.py` → `waso-teacher` over
 Ollama with global dedup) is in "Stage 2 serving" + the bench reference.
 Stage 3 (`train_tokenizer.py`, `train_student.py`, `talk_to_student.py` — the
-deliverable) is in "Stage 3 — Student". A 30k-seed bulk augmentation is in
-flight; full student training waits for it.
+deliverable) is in "Stage 3 — Student". The first bulk augmentation run
+(30k seeds → 201,567 records / ~25.9 M tokens) completed 2026-06-02; the
+student training run is the next move.
 
 ---
 
@@ -511,11 +512,26 @@ renders the output through `sitelen.translate.latin_to_ucsur` for sitelen
 pona display. The student itself only ever sees Latin script; UCSUR is the
 application layer wrapping it, exactly as the diagram in the intro shows.
 
-### Status
-All three scripts exist and a CPU smoke train of `train_student.py` passes
+### Status (2026-06-02)
+All three scripts exist; a CPU smoke train of `train_student.py` passes
 end-to-end (loss descends, eval + sample-gen + checkpoint all work). The
-real training run waits on the in-flight 30k-seed bulk augmentation
-(~25 M tokens target). Once `synthetic.jsonl` is full, the sequence is:
-re-run `train_tokenizer.py` over the bigger corpus → run `train_student.py`
-(~20k steps, plausibly an hour or two on the RTX 5060) → eyeball
+30k-seed bulk augmentation completed — `synthetic.jsonl` now holds
+**201,567 records / 1.82 M word-tokens / ~25.9 M Ollama-tokens** with
+**1,121 unique TP words** (per-record `distinct-2 = 0.987`, no internal
+looping; balanced ~99k continuation / ~102k paraphrase).
+
+A "record" here = one accepted JSON line — typically a single short TP
+sentence (~9 words avg) plus `{source, seed, mode}` metadata. The student's
+trainer concatenates all `text` fields with `<bos>…<eos>` framing into one
+token stream and samples random windows.
+
+**Saturation hit on schedule.** Accept rate dropped 70.4 % → 59.2 % between
+the first 5k seeds and the next 25k; records/seed slid 7.74 → 6.51. The
+dup-rate-vs-seeds knee predicted at ~30 k landed at ~30 k. Going further
+would yield diminishing unique-record returns — for the targeted ~25 M
+tokens this is the right stopping point.
+
+Next: re-run `train_tokenizer.py` over the bigger corpus → run
+`train_student.py` (~20k steps, plausibly an hour or two on the RTX 5060)
+→ eyeball
 generations via `talk_to_student.py`.
