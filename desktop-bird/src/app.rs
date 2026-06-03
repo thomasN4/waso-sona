@@ -8,6 +8,11 @@
 use std::num::NonZeroU32;
 use std::time::Instant;
 
+use cosmic_client_toolkit::{
+    delegate_toplevel_info,
+    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
+};
+use cosmic_client_toolkit::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, Region},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
@@ -25,9 +30,11 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
+use crate::cosmic::CosmicTracker;
 use crate::motion::Wander;
 use crate::render::{self, Rect};
 use crate::sprite::Sprite;
+use crate::tracker::{WindowInfo, WindowTracker};
 
 /// Wing-flap animation rate (frames per second).
 const ANIM_FPS: f32 = 8.0;
@@ -53,6 +60,9 @@ pub struct AppState {
     anim_accum: f32,
     /// Bird rect drawn in the previous frame, for damage union.
     prev_rect: Option<Rect>,
+    /// Active-window source. `None` when not on COSMIC (the bird just wanders;
+    /// the KWin backend lands in a later slice).
+    tracker: Option<CosmicTracker>,
 }
 
 impl AppState {
@@ -65,6 +75,7 @@ impl AppState {
         layer: LayerSurface,
         input_region: Region,
         sprite: Sprite,
+        tracker: Option<CosmicTracker>,
     ) -> Self {
         AppState {
             registry_state,
@@ -82,6 +93,7 @@ impl AppState {
             last_frame: Instant::now(),
             anim_accum: 0.0,
             prev_rect: None,
+            tracker,
         }
     }
 
@@ -90,6 +102,19 @@ impl AppState {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.25); // clamp after stalls
         self.last_frame = now;
+
+        // Interim behaviour to prove the tracker end-to-end: perch on the active
+        // window's top edge when we know it, otherwise wander. The real fly /
+        // perch / idle state machine (BirdBrain) is a later slice.
+        let frame = self.sprite.current_frame();
+        let (sw, sh) = (frame.w, frame.h);
+        match self.tracker.as_ref().and_then(|t| t.active_window()) {
+            Some(window) => {
+                let (px, py) = perch_target(&window, sw, sh);
+                self.motion.fly_to(px, py);
+            }
+            None => self.motion.wander(),
+        }
 
         self.motion.update(dt);
 
@@ -243,6 +268,62 @@ impl ShmHandler for AppState {
     }
 }
 
+impl ToplevelInfoHandler for AppState {
+    fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
+        // Only reached while toplevel events are flowing, which requires a
+        // tracker (its globals were bound in `main`).
+        &mut self
+            .tracker
+            .as_mut()
+            .expect("toplevel events arrived without a COSMIC tracker")
+            .info_state
+    }
+
+    fn new_toplevel(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+        self.refresh_tracker();
+    }
+
+    fn update_toplevel(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+        self.refresh_tracker();
+    }
+
+    fn toplevel_closed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) {
+        self.refresh_tracker();
+    }
+}
+
+impl AppState {
+    fn refresh_tracker(&mut self) {
+        if let Some(tracker) = self.tracker.as_mut() {
+            tracker.refresh();
+        }
+    }
+}
+
+/// Where the bird should sit to perch on `window`: centred on its top edge,
+/// feet at the edge. Bounds clamping happens in `Wander::fly_to`.
+fn perch_target(window: &WindowInfo, sprite_w: u32, sprite_h: u32) -> (f32, f32) {
+    let g = window.geometry;
+    let x = g.x as f32 + g.w as f32 / 2.0 - sprite_w as f32 / 2.0;
+    let y = g.y as f32 - sprite_h as f32;
+    (x, y)
+}
+
 impl ProvidesRegistryState for AppState {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
@@ -255,3 +336,4 @@ delegate_output!(AppState);
 delegate_shm!(AppState);
 delegate_layer!(AppState);
 delegate_registry!(AppState);
+delegate_toplevel_info!(AppState);

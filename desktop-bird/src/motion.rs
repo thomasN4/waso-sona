@@ -29,6 +29,9 @@ pub struct Wander {
     facing_left: bool,
     /// Whether bounds have been set (i.e. the surface has been configured).
     ready: bool,
+    /// True while steering toward an externally supplied target (a perch). In
+    /// this mode we hold position on arrival instead of picking a new target.
+    external: bool,
 }
 
 impl Wander {
@@ -43,6 +46,27 @@ impl Wander {
             idle: 0.0,
             facing_left: false,
             ready: false,
+            external: false,
+        }
+    }
+
+    /// Steer toward an explicit point — e.g. a perch on the active window —
+    /// clamped to the visible area. Holds there on arrival (no re-wandering).
+    pub fn fly_to(&mut self, x: f32, y: f32) {
+        if !self.ready {
+            return;
+        }
+        self.tx = x.clamp(0.0, self.max_x);
+        self.ty = y.clamp(0.0, self.max_y);
+        self.idle = 0.0;
+        self.external = true;
+    }
+
+    /// Resume autonomous wandering (called when there is no active window).
+    pub fn wander(&mut self) {
+        if self.external {
+            self.external = false;
+            self.pick_target();
         }
     }
 
@@ -78,6 +102,10 @@ impl Wander {
         let dist = (dx * dx + dy * dy).sqrt();
 
         if dist <= ARRIVE_EPS {
+            if self.external {
+                // Perched on the target window; hold position.
+                return;
+            }
             // Arrived: maybe perch a moment, then choose a new destination.
             let mut rng = rand::rng();
             if rng.random_bool(0.5) {

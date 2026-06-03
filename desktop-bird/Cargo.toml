@@ -3,7 +3,10 @@ name = "desktop-bird"
 version = "0.1.0"
 edition = "2024"
 description = "A desktop pet bird that perches on the active window and flies around (Wayland: KWin + COSMIC)"
-license = "MIT"
+# GPL-3.0 because the COSMIC backend depends on cosmic-client-toolkit /
+# cosmic-protocols (GPL-3.0-only). The renderer itself only needs the MIT
+# Smithay crates; see the cosmic deps below.
+license = "GPL-3.0-only"
 
 [dependencies]
 # Wayland client + layer-shell (the shared renderer is built on these).
@@ -13,3 +16,7 @@ wayland-client = "0.31"
 rand = "0.10"
 # Optional sprite source: load PNG animation frames. Only the png decoder is needed.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# COSMIC active-window tracking (cosmic-toplevel-info). GPL-3.0-only — see the
+# license note above. cctk re-uses the same sctk/wayland-client versions above.
+cosmic-client-toolkit = "0.2"
+cosmic-protocols = "0.2"

@@ -8,11 +8,15 @@
 //! (Plasma 6) and cosmic-comp (COSMIC).
 
 mod app;
+mod cosmic;
 mod motion;
 mod render;
 mod sprite;
+mod tracker;
 
 use app::AppState;
+use cosmic::CosmicTracker;
+use cosmic_client_toolkit::toplevel_info::ToplevelInfoState;
 use smithay_client_toolkit::{
     compositor::{CompositorState, Region},
     output::OutputState,
@@ -61,14 +65,31 @@ fn main() {
 
     let sprite = Sprite::load_from_env().unwrap_or_else(Sprite::placeholder);
 
+    let registry_state = RegistryState::new(&globals);
+
+    // COSMIC advertises cosmic-toplevel-info; that's our active-window source.
+    // Elsewhere (e.g. KWin) the bird just wanders until the KWin backend lands.
+    let has_cosmic = globals
+        .contents()
+        .with_list(|globals| globals.iter().any(|g| g.interface == "zcosmic_toplevel_info_v1"));
+    let tracker = if has_cosmic {
+        ToplevelInfoState::try_new(&registry_state, &qh).map(CosmicTracker::new)
+    } else {
+        eprintln!(
+            "desktop-bird: no cosmic-toplevel-info global; window tracking disabled (bird will wander)"
+        );
+        None
+    };
+
     let mut state = AppState::new(
-        RegistryState::new(&globals),
+        registry_state,
         OutputState::new(&globals, &qh),
         shm,
         pool,
         layer,
         region,
         sprite,
+        tracker,
     );
 
     loop {

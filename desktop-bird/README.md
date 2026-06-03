@@ -7,10 +7,20 @@ Wayland-protocol reasoning behind it.
 
 ## Status
 
-**Slice 1 — the shared renderer (done).** A transparent, click-through
-`wlr-layer-shell` surface fills the output; the bird is drawn at an offset inside
-it and wanders semi-randomly. No window tracking yet — the bird does not perch on
-real windows. That part is per-compositor and comes next (see *Roadmap*).
+- **Slice 1 — shared renderer (done).** A transparent, click-through
+  `wlr-layer-shell` surface fills the output; the bird is drawn at an offset
+  inside it. Portable to any layer-shell compositor.
+- **Slice 2 — COSMIC window tracker (done).** On COSMIC, the bird reads the
+  active window's geometry from `cosmic-toplevel-info` and perches on its top
+  edge; off COSMIC it falls back to wandering. KWin tracking is next.
+
+## Licensing
+
+The renderer depends only on the MIT Smithay crates. The **COSMIC backend**
+pulls in `cosmic-client-toolkit` / `cosmic-protocols`, which are **GPL-3.0-only**,
+so the crate as a whole is currently **GPL-3.0-only** (see `Cargo.toml`). If an
+MIT/permissive build matters, the COSMIC backend would need to be put behind an
+optional cargo feature (not done yet).
 
 ## Build & run
 
@@ -42,6 +52,20 @@ BIRD_SPRITE_DIR=/path/to/frames cargo run --release
 | `src/render.rs` | `Rect` math and the RGBA→premultiplied-BGRA sprite blit. |
 | `src/sprite.rs` | `Sprite`/`Frame`, the placeholder bird, and the PNG-frame loader. |
 | `src/motion.rs` | `Wander` — placeholder motion (stand-in for the future shared `BirdBrain`). |
+| `src/tracker.rs` | `WindowTracker` trait + `WindowInfo` — the per-compositor abstraction. |
+| `src/cosmic.rs` | `CosmicTracker` — active-window geometry via cctk `ToplevelInfoState`. |
+
+## Window tracking (COSMIC)
+
+`cosmic-toplevel-info` is dispatched on the **same** Wayland event queue as the
+renderer (its globals live on the same registry), so no extra event loop is
+needed yet. At startup we check the registry for `zcosmic_toplevel_info_v1`; if
+present we bind cctk's `ToplevelInfoState`, otherwise tracking is disabled. The
+active (`Activated`) toplevel's geometry drives a simple perch target on its top
+edge. The active window is logged to stderr on change.
+
+> The KWin backend (a `.kwinscript` pushing geometry over **D-Bus**) *will* need
+> a second event source — that's when the loop moves to `calloop`.
 
 ## How it renders
 
@@ -54,10 +78,10 @@ makes the whole surface click-through.
 
 ## Roadmap (next slices)
 
-- **`WindowTracker` trait** to get the active window's geometry, with two backends:
-  - **COSMIC**: bind `cosmic-toplevel-info-unstable-v1` and read its `geometry` event.
-  - **KWin**: ship a `.kwinscript` that pushes `frameGeometry` over D-Bus.
-- Real **`BirdBrain`** state machine (fly-to / perch / wander) driven by tracker geometry.
+- **KWin `WindowTracker` backend**: ship a `.kwinscript` that pushes
+  `frameGeometry` over D-Bus (the COSMIC backend already exists). Needs `calloop`.
+- Real **`BirdBrain`** state machine (fly-to / perch / wander) driven by tracker
+  geometry, replacing the interim perch logic in `app.rs`.
 - Multi-output (per-output surfaces + coordinate translation).
 - Optional draggable/pettable bird (sprite-shaped, non-empty input region).
 
