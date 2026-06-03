@@ -57,6 +57,16 @@ PARAPHRASE_FEWSHOT = [
     ("mi ken ala ken open e lupa lili?", "mi ken open e lupa lili anu seme?"),
 ]
 
+# Task-demonstrating few-shot for English→Toki Pona translation (real, short
+# pairs from data/processed/translation_pairs.jsonl). Shapes the model toward
+# concise faithful renderings rather than verbose drift. Matches the SFT prompt
+# built by build_sft_dataset.py --translation-only, so train == inference.
+TRANSLATE_FEWSHOT = [
+    ("This is a person.", "ni li jan."),
+    ("Go to bed!", "o tawa supa lape!"),
+    ("It's no big deal.", "ni li ijo suli ala."),
+]
+
 _WORD_RE = re.compile(r"[A-Za-z]+")
 
 
@@ -70,6 +80,10 @@ def _fewshot_block() -> str:
 
 def _paraphrase_fewshot_block() -> str:
     return "\n".join(f"- {a} → {b}" for a, b in PARAPHRASE_FEWSHOT)
+
+
+def _translate_fewshot_block() -> str:
+    return "\n".join(f"- {en} → {tp}" for en, tp in TRANSLATE_FEWSHOT)
 
 
 def _paraphrase_prompt(seed: str) -> str:
@@ -93,6 +107,18 @@ def _continuation_prompt(seed: str) -> str:
         "Continue the following Toki Pona sentence with 1-2 more natural sentences:\n"
         f"{seed}\n\n"
         "Output only the continuation sentences, nothing else."
+    )
+
+
+def _translate_prompt(english: str) -> str:
+    return (
+        "You are an assistant who translates English into Toki Pona. "
+        "Output only Toki Pona text — no English, no markdown, no labels.\n\n"
+        "Here are examples of English → Toki Pona translation:\n"
+        f"{_translate_fewshot_block()}\n\n"
+        "Translate the following English sentence into Toki Pona:\n"
+        f"{english}\n\n"
+        "Output only the Toki Pona translation, nothing else."
     )
 
 

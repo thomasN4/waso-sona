@@ -47,6 +47,9 @@ DEFAULT_INPUT = REPO_ROOT / "data" / "processed" / "corpus.filtered.jsonl"
 DEFAULT_OUT_TRAIN = REPO_ROOT / "data" / "processed" / "sft_train.jsonl"
 DEFAULT_OUT_VAL = REPO_ROOT / "data" / "processed" / "sft_val.jsonl"
 DEFAULT_PARAPHRASE_PAIRS = REPO_ROOT / "data" / "processed" / "paraphrase_pairs.jsonl"
+DEFAULT_TRANSLATION_PAIRS = REPO_ROOT / "data" / "processed" / "translation_pairs.jsonl"
+DEFAULT_OUT_TRANSLATE_TRAIN = REPO_ROOT / "data" / "processed" / "sft_translate_train.jsonl"
+DEFAULT_OUT_TRANSLATE_VAL = REPO_ROOT / "data" / "processed" / "sft_translate_val.jsonl"
 MODEL_ID = "google/gemma-4-E2B-it"
 
 # Copied from scripts/fetch_data.py:201 — sentence-final punctuation OR newline.
@@ -172,40 +175,14 @@ def percentiles(xs: list[int], ps=(0.5, 0.9, 0.99)) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Example builders
 # ---------------------------------------------------------------------------
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    ap.add_argument("--output-train", type=Path, default=DEFAULT_OUT_TRAIN)
-    ap.add_argument("--output-val", type=Path, default=DEFAULT_OUT_VAL)
-    ap.add_argument("--model-id", default=MODEL_ID,
-                    help="HF model id used only for its tokenizer + chat template")
-    ap.add_argument("--max-tokens", type=int, default=1024)
-    ap.add_argument("--val-frac", type=float, default=0.05)
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--max-tatoeba", type=int, default=20000,
-                    help="cap tatoeba random sample (default 20000)")
-    ap.add_argument("--paraphrase-pairs", type=Path, default=DEFAULT_PARAPHRASE_PAIRS,
-                    help="JSONL of {a,b} TP paraphrase pairs (build_paraphrase_pairs.py)")
-    ap.add_argument("--max-paraphrase", type=int, default=None,
-                    help="cap paraphrase examples added (default: all)")
-    ap.add_argument("--topic-prompt-frac", type=float, default=0.20,
-                    help="probability a chunk becomes a topic-prompt example (default 0.20)")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="cap docs read from input (for smoke testing)")
-    args = ap.parse_args(argv)
-
-    rng = random.Random(args.seed)
-
-    if not args.input.exists():
-        print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
-        return 1
-
-    print(f"Loading tokenizer {args.model_id}…", flush=True)
-    tok = AutoTokenizer.from_pretrained(args.model_id)
-
+def build_corpus_examples(
+    args, rng: random.Random,
+) -> tuple[list[dict], collections.Counter]:
+    """The multi-task teacher dataset: continuation + topic + paraphrase from
+    the real corpus. (Unchanged from the original inline pipeline.)"""
     print(f"Reading {args.input}…", flush=True)
     docs: list[dict] = []
     with args.input.open(encoding="utf-8") as f:
@@ -287,6 +264,91 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"  (no paraphrase pairs at {args.paraphrase_pairs}; skipping)",
               flush=True)
+    return examples, chunks_by_source
+
+
+def build_translation_examples(
+    pairs_path: Path, rng: random.Random,
+) -> tuple[list[dict], collections.Counter]:
+    """The standalone translator dataset: one en→tp example per parallel pair
+    from build_translation_pairs.py. User message is the exact inference shape
+    (`_translate_prompt`); response is the TP target. `id` is the eng_id so the
+    downstream hash split stays by English sentence."""
+    if not pairs_path.exists():
+        print(f"ERROR: translation pairs not found: {pairs_path}", file=sys.stderr)
+        raise SystemExit(1)
+    pairs = [json.loads(ln) for ln in
+             pairs_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    rng.shuffle(pairs)
+    examples: list[dict] = []
+    for p in pairs:
+        examples.append({
+            "source": p.get("source", "tatoeba"),
+            "id": str(p.get("eng_id", "")),
+            "mode": "translation",
+            "messages": [
+                {"role": "user",
+                 "content": augment_corpus._translate_prompt(p["en"])},
+                {"role": "assistant", "content": p["tp"]},
+            ],
+        })
+    print(f"  translation pairs: {len(examples)}", flush=True)
+    return examples, collections.Counter()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    ap.add_argument("--output-train", type=Path, default=DEFAULT_OUT_TRAIN)
+    ap.add_argument("--output-val", type=Path, default=DEFAULT_OUT_VAL)
+    ap.add_argument("--model-id", default=MODEL_ID,
+                    help="HF model id used only for its tokenizer + chat template")
+    ap.add_argument("--max-tokens", type=int, default=1024)
+    ap.add_argument("--val-frac", type=float, default=0.05)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--max-tatoeba", type=int, default=20000,
+                    help="cap tatoeba random sample (default 20000)")
+    ap.add_argument("--paraphrase-pairs", type=Path, default=DEFAULT_PARAPHRASE_PAIRS,
+                    help="JSONL of {a,b} TP paraphrase pairs (build_paraphrase_pairs.py)")
+    ap.add_argument("--max-paraphrase", type=int, default=None,
+                    help="cap paraphrase examples added (default: all)")
+    ap.add_argument("--topic-prompt-frac", type=float, default=0.20,
+                    help="probability a chunk becomes a topic-prompt example (default 0.20)")
+    ap.add_argument("--translation-only", action="store_true",
+                    help="build a standalone en→tp translator SFT from "
+                         "--translation-pairs (skips the corpus/teacher modes)")
+    ap.add_argument("--translation-pairs", type=Path,
+                    default=DEFAULT_TRANSLATION_PAIRS,
+                    help="JSONL of {en,tp,eng_id} pairs (build_translation_pairs.py)")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="cap docs read from input (for smoke testing)")
+    args = ap.parse_args(argv)
+
+    # In translation-only mode, default the outputs to the translator files
+    # unless the caller overrode them explicitly.
+    if args.translation_only:
+        if args.output_train == DEFAULT_OUT_TRAIN:
+            args.output_train = DEFAULT_OUT_TRANSLATE_TRAIN
+        if args.output_val == DEFAULT_OUT_VAL:
+            args.output_val = DEFAULT_OUT_TRANSLATE_VAL
+
+    rng = random.Random(args.seed)
+
+    print(f"Loading tokenizer {args.model_id}…", flush=True)
+    tok = AutoTokenizer.from_pretrained(args.model_id)
+
+    if args.translation_only:
+        examples, chunks_by_source = build_translation_examples(
+            args.translation_pairs, rng)
+    else:
+        if not args.input.exists():
+            print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
+            return 1
+        examples, chunks_by_source = build_corpus_examples(args, rng)
 
     print(f"\nRaw examples: {len(examples)}", flush=True)
     print(f"  chunks per source: {dict(chunks_by_source)}", flush=True)
@@ -323,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         # Mode-aware: paraphrase clusters reuse the same target across
         # different sources, so dedup on (prompt, response) to keep distinct
         # a→b pairs. Continuation/topic stay response-only (unchanged).
-        if ex["mode"] == "paraphrase":
+        if ex["mode"] in ("paraphrase", "translation"):
             key = dedup_key(ex["messages"][0]["content"] + "␟"
                             + ex["messages"][1]["content"])
         else:
