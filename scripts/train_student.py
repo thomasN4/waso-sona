@@ -276,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--grad-clip", type=float, default=1.0)
     ap.add_argument("--eval-steps", type=int, default=500)
     ap.add_argument("--eval-batches", type=int, default=20)
+    ap.add_argument("--early-stop-patience", type=int, default=6,
+                    help="stop after N consecutive evals without val improvement (0 disables)")
+    ap.add_argument("--early-stop-min-delta", type=float, default=1e-3,
+                    help="min syn_val decrease to count as an improvement")
     ap.add_argument("--save-steps", type=int, default=1000)
     ap.add_argument("--sample-steps", type=int, default=1000)
     ap.add_argument("--val-frac", type=float, default=0.05)
@@ -374,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
     writer = SummaryWriter(log_dir=str(args.run_dir))
     sample_gen = torch.Generator().manual_seed(args.seed + 1)
     best_val = float("inf")
+    stale_evals = 0
+    stopped_step = None
     t0 = time.monotonic()
     print("Starting training…", flush=True)
     for step in range(args.max_steps):
@@ -409,12 +415,21 @@ def main(argv: list[str] | None = None) -> int:
                                  sample_gen)
                 writer.add_scalar("eval/real_loss", rval, step)
                 line += f"  real_val={rval:.4f}"
-            print(line, flush=True)
-            if val < best_val:
+            if val < best_val - args.early_stop_min_delta:
                 best_val = val
+                stale_evals = 0
                 torch.save({"model": model.state_dict(), "cfg": asdict(cfg),
                             "step": step, "val_loss": val},
                            args.run_dir / "best.pt")
+            else:
+                stale_evals += 1
+                line += f"  (stale {stale_evals}/{args.early_stop_patience})"
+            print(line, flush=True)
+            if args.early_stop_patience > 0 and stale_evals >= args.early_stop_patience:
+                stopped_step = step
+                print(f"  early stop @ {step}: no syn_val improvement "
+                      f"for {stale_evals} evals (best={best_val:.4f})", flush=True)
+                break
 
         if step > 0 and step % args.sample_steps == 0:
             ctx = torch.tensor([[bos_id]], dtype=torch.long, device=device)
@@ -430,11 +445,14 @@ def main(argv: list[str] | None = None) -> int:
                        args.run_dir / "last.pt")
 
     # Final save
+    final_step = stopped_step if stopped_step is not None else args.max_steps
     torch.save({"model": model.state_dict(), "cfg": asdict(cfg),
-                "step": args.max_steps, "val_loss": best_val},
+                "step": final_step, "val_loss": best_val},
                args.run_dir / "final.pt")
     writer.close()
-    print(f"\nDone. best syn_val={best_val:.4f}", flush=True)
+    reason = f"early stop @ {stopped_step}" if stopped_step is not None \
+        else f"reached max_steps ({args.max_steps})"
+    print(f"\nDone ({reason}). best syn_val={best_val:.4f}", flush=True)
     return 0
 
 
