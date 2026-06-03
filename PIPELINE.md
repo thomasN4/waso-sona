@@ -12,12 +12,14 @@ Three stages:
 1. **Teacher (built).** QLoRA fine-tune Gemma 4 on the real TP corpus so it
    produces fluent, grounded Toki Pona. Most of this document details this
    stage — fetch, filter, SFT-dataset build, optional vocab-pruning, training.
-2. **Augment (partial).** Use the fine-tuned Gemma to expand the real corpus
-   via paraphrase + continuation of real sentences → a larger
-   synthetic-but-grounded corpus.
-3. **Student (planned — the actual product).** Train the tiny TP LM **from
-   scratch** on the augmented corpus. Its architecture, tokenizer, and trainer
-   are **still TBD**.
+2. **Augment.** Use the fine-tuned Gemma to expand the corpus. *v1 (done)*
+   paraphrases + continues real sentences — but that only recombines existing
+   TP and saturated *below* the real corpus's size (see "Stage 2 v2"). *v2
+   (planned)* translates diverse English into TP to inject genuinely new
+   content.
+3. **Student (built — the actual product).** Train the tiny TP LM **from
+   scratch** (nanoGPT-style decoder, ~5.4 M params, SP-BPE vocab 2048). First
+   full run completed 2026-06-02.
 
 ```
   Stage 1 — TEACHER (built)
@@ -35,10 +37,11 @@ Three stages:
         ▼
     fine-tuned Gemma 4 adapter  (data/training/runs/qlora-<UTC>/final/, ~96 MB)
 
-  Stage 2 — AUGMENT (partial)
-        │  augment_corpus.py — fine-tuned Gemma paraphrases + continues real TP
+  Stage 2 — AUGMENT
+        │  v1 (done):    augment_corpus.py    — paraphrase + continuation of real TP
+        │  v2 (planned): translate_corpus.py  — waso-translator turns English → TP
         ▼
-    augmented corpus  (real + synthetic-but-grounded TP)
+    augmented corpus  (real + synthetic TP; v2 adds new-content TP from English)
 
   Stage 3 — STUDENT (built; the deliverable)
         │  train_tokenizer.py (SP BPE, vocab 2048)  →  spm.model
@@ -56,14 +59,20 @@ student — **only ever sees Latin-script Toki Pona**. UCSUR (sitelen pona) is a
 display concern handled deterministically by the `sitelen/` package on the way
 in and out — see [`sitelen/translate.py`](sitelen/translate.py).
 
-**Current state:** All three stages are built. Stage 1 (the QLoRA teacher) is
-documented across the "Data sources / preprocessing" and "Training:
-train_qlora.py" sections. Stage 2 (`augment_corpus.py` → `waso-teacher` over
-Ollama with global dedup) is in "Stage 2 serving" + the bench reference.
+**Current state:** Stages 1 and 3 are built; Stage 2 has a working v1 and a
+planned v2. Stage 1 (the QLoRA teacher) is documented across the "Data sources
+/ preprocessing" and "Training: train_qlora.py" sections. Stage 2 v1
+(`augment_corpus.py` → `waso-teacher` over Ollama with global dedup) is in
+"Stage 2 serving" + the bench reference; the 30k-seed run produced **201,567
+records / 1.82 M words ≈ 1.9 M SentencePiece tokens** (the "~25.9 M tokens"
+quoted in earlier notes was the teacher's gross `eval_count` across all 8
+calls/seed, ~93 % of it discarded by truncation + dedup — *not* the trainable
+corpus size). That is *smaller* than the 3.16 M-token real corpus and
+recombines only ~1,800 word-forms, so a translation-based **Stage 2 v2** is
+planned to add genuine content (see "Stage 2 v2 — Translation augmentation").
 Stage 3 (`train_tokenizer.py`, `train_student.py`, `talk_to_student.py` — the
-deliverable) is in "Stage 3 — Student". The first bulk augmentation run
-(30k seeds → 201,567 records / ~25.9 M tokens) completed 2026-06-02; the
-student training run is the next move.
+deliverable) is in "Stage 3 — Student"; its first full training run completed
+2026-06-02 (early-stopped ~step 7000, best syn_val 1.73, real_val ~4.0).
 
 ---
 
@@ -469,6 +478,80 @@ student corpus duplicate-free; per-seed dedup + `_filter_sentence` run first.
 
 Throughput: ~120 tok/s on the RTX 5060 via Ollama (q8_0), vs ~15–30 tok/s for
 the HF + 4-bit path — the reason bulk augmentation goes through GGUF/Ollama.
+
+---
+
+## Stage 2 v2 — Translation augmentation (planned)
+
+**Why v1 hit a wall.** Paraphrase + continuation can only *recombine* Toki Pona
+that already exists — the teacher conditions on a TP seed and emits more TP from
+the same ~137-word vocabulary. It cannot add semantic *content*. The 30k-seed
+bulk run made this concrete: output saturated (accept rate 70 %→59 %,
+records/seed 7.74→6.51) and yielded 201,567 records / 1.82 M words ≈ **1.9 M
+SentencePiece tokens** — *smaller* than the 3.16 M-token real corpus it was
+meant to multiply 10×, built from only ~1,800 distinct word-forms. The
+"paraphrase" half doesn't even track the seed's meaning (the en-sibling signal
+is too loose — see the v1 caveat above), so both modes effectively emit generic
+valid TP. Surface-unique, semantically thin.
+
+**The fix: translation.** Translate diverse **English** source text into TP. Now
+the novelty comes from the *source content*, constrained into TP's vocabulary —
+the corpus gains real topical range instead of more function-word permutations.
+Translation is the only lever that actually multiplies a closed-vocabulary
+language's data, because the new information enters from outside the language.
+
+**1. Translator (`waso-translator`, or a translate task on `waso-teacher`).**
+Reuse the QLoRA pipeline unchanged (`train_qlora.py`, base `gemma-4-E2B-it`,
+r16) with a new en→tp SFT task: `user = "Translate to Toki Pona: <english>"`,
+`assistant = "<tp>"`, same `MINIMAL_CHAT_TEMPLATE`. Recommended: fold it into the
+existing **multi-task teacher** as a 4th task (alongside continuation /
+paraphrase / topic) so one Ollama model serves all of Stage 2; fall back to a
+standalone `waso-translator` if the task mix dilutes quality.
+
+**2. Parallel SFT data (~40k pairs, mostly already latent).** Tatoeba's
+`data/raw/tatoeba/tok-eng_links.tsv` (~45k tok↔eng id links, already fetched) +
+the local `tok_sentences.tsv`, joined against Tatoeba's `eng_sentences.tsv` (one
+extra download), yields ~40k aligned **(English, TP)** pairs. Restore the 13
+`lipu` direct pairs (English is currently discarded in `iter_lipu`). Filter every
+TP target through `_filter_sentence` (the same strict validator). New builder:
+`scripts/build_translation_pairs.py` feeding a `translation` mode in
+`build_sft_dataset.py`. Hold a slice out for translator eval.
+
+**3. English source for inference — the actual augmentation.** Translate *novel*
+English that is **not** in the tp-linked set, so the TP output is genuinely new:
+- Primary: Tatoeba English sentences that lack a TP link (simple
+  single-sentence register — the same distribution the translator trains on —
+  and very large volume).
+- Stretch: Simple-English Wikipedia sentences (concrete encyclopedic content).
+- Constraint: keep the source **simple and concrete**. TP cannot express
+  abstract / technical English; those inputs translate into unknown words and
+  get dropped by `_filter_sentence` — wasted teacher time. Pre-filter the source
+  for short, concrete sentences before translating.
+
+**4. Generation loop — reuse the v1 machinery.** A `translate` mode in
+`augment_corpus.py` (or a sibling `scripts/translate_corpus.py`) reuses
+`_ollama_generate` (`/api/chat`), `_split_into_sentences`, `_filter_sentence`,
+the per-seed + global dedup, and the `.done` resumability sidecar **unchanged**.
+New parts are small: an `_english_to_tp_prompt(english)` few-shot builder, an
+English-source loader (replacing the TP `sentences.txt` input), and two
+translation-specific rejects — **leftover English** (non-TP letters / English
+tokens survived in the output) and **copy-of-source / refusal**. Output:
+`data/processed/translated.jsonl` — `{source: "waso-translator/translate", eng,
+text}`.
+
+**5. Eval.** Translator quality on the held-out Tatoeba slice (chrF / BLEU vs the
+reference TP) plus the `_filter_sentence` validity pass-rate at inference; the
+end-to-end signal is the **student's `eval/real_loss`** (v1 leaves it ~4.0 vs
+syn_val ~1.7 — translated content is the lever expected to close that gap).
+Optional QC: tp→en back-translation and similarity to the source English, to
+catch fluent mistranslations the grammar filter can't see.
+
+**6. Student integration.** The student then trains on **real (primary) +
+translated (new content) + v1 synthetic (grammar regularization)**, with a
+held-out real slice kept *out* of training for the honest eval. Note
+`train_student.py` currently trains on the v1 synthetic only and uses just 200
+real docs purely for eval — folding the real + translated corpora into training
+is the companion change on the Stage 3 side.
 
 ---
 
