@@ -63,11 +63,16 @@ def chrf(hyp: str, ref: str, n_max: int = 6, beta: float = 2.0) -> float:
     return 100.0 * (1 + b2) * p * r / (b2 * p + r)
 
 
-def _first_line(text: str) -> str:
+def _first_sentence(text: str) -> str:
+    """Take the first sentence only — the translator tends to emit a correct
+    rendering and then ramble, so (like the v1 loop's [:1]/[:2]) we keep the
+    leading sentence. Falls back to the first non-empty line."""
+    sents = augment_corpus._split_into_sentences(text)
+    if sents:
+        return sents[0].strip()
     for line in text.splitlines():
-        line = line.strip()
-        if line:
-            return line
+        if line.strip():
+            return line.strip()
     return text.strip()
 
 
@@ -99,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 prompt, args.model, args.max_tokens, 1.1, 64)
         except Exception as exc:  # noqa: BLE001 — record, don't crash the gate
             return {"en": p["en"], "ref": p["tp"], "hyp": "", "error": str(exc)}
-        hyp = _first_line(text)
+        hyp = _first_sentence(text)
         return {"en": p["en"], "ref": p["tp"], "hyp": hyp}
 
     results: list[dict] = []
