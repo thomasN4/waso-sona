@@ -55,12 +55,12 @@ BENCH_DIR = REPO_ROOT / "data" / "bench"
 # (label, adapter dir, base model). Bases differ: baseline rides the stock
 # Gemma 4, the pruned adapters ride the pruned base.
 DEFAULT_MODELS = [
-    ("baseline", "data/training/runs/qlora-20260527T223141Z/final",
+    ("baseline", "models/runs/qlora-20260527T223141Z/final",
      "google/gemma-4-E2B-it"),
-    ("parity", "data/training/runs/qlora-20260528T022232Z/final",
-     "data/training/base-pruned"),
-    ("bumped", "data/training/runs/qlora-20260528T085717Z/final",
-     "data/training/base-pruned"),
+    ("parity", "models/runs/qlora-20260528T022232Z/final",
+     "models/base-pruned"),
+    ("bumped", "models/runs/qlora-20260528T085717Z/final",
+     "models/base-pruned"),
 ]
 
 # Diverse grammatical TP seeds, fed through augment_corpus._continuation_prompt

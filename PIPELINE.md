@@ -35,7 +35,7 @@ Three stages:
     sft_train.jsonl / sft_val.jsonl
         │  train_qlora.py        (optional: prune_vocab.py first)
         ▼
-    fine-tuned Gemma 4 adapter  (data/training/runs/qlora-<UTC>/final/, ~96 MB)
+    fine-tuned Gemma 4 adapter  (models/runs/qlora-<UTC>/final/, ~96 MB)
 
   Stage 2 — AUGMENT
         │  v1 (done):    augment_corpus.py    — paraphrase + continuation of real TP
@@ -169,13 +169,13 @@ tokenizes. On the current corpora:
 | corpus round-trip | 100 / 100 decoded identically |
 | VRAM at model load | 6.74 GB → **5.98 GB** (−760 MB) |
 
-Output lands in `data/training/base-pruned/` (a plain HF safetensors
+Output lands in `models/base-pruned/` (a plain HF safetensors
 checkpoint + pruned tokenizer). To train against it, pass
-`--model-id data/training/base-pruned` to `train_qlora.py` — no other
+`--model-id models/base-pruned` to `train_qlora.py` — no other
 flags change, and `chunked_causal_lm_loss` reads the new `vocab_size`
 from the config automatically. The pruned tokenizer is saved into each
 run's `final/` adapter dir, so `infer.py` picks it up; only the
-`--base-model data/training/base-pruned` flag is needed at inference.
+`--base-model models/base-pruned` flag is needed at inference.
 
 **Parity cost:** retraining at identical hyperparameters
 (`qlora-20260528T022232Z` vs the un-pruned `qlora-20260527T223141Z`)
@@ -322,7 +322,7 @@ training step needs essentially all of the remaining VRAM, so:
 4. **(Optional) TensorBoard** for live monitoring. In a separate tmux
    window:
    ```sh
-   .venv/bin/tensorboard --logdir data/training/runs/ --port 6006
+   .venv/bin/tensorboard --logdir models/runs/ --port 6006
    ```
    Then from a laptop terminal:
    ```sh
@@ -340,7 +340,7 @@ training step needs essentially all of the remaining VRAM, so:
 
 ## Output layout
 
-Each run writes to `data/training/runs/qlora-<UTC>/`:
+Each run writes to `models/runs/qlora-<UTC>/`:
 
 ```
 qlora-20260526T203942Z/
@@ -566,7 +566,7 @@ Three scripts:
 ### `scripts/train_tokenizer.py`
 Trains a small **SentencePiece BPE** tokenizer (vocab=2,048, byte-fallback
 on) over `synthetic.jsonl` + a chars-capped slice of `corpus.filtered.jsonl`.
-Output → `data/training/student_tokenizer/spm.{model,vocab}`. On the current
+Output → `models/student_tokenizer/spm.{model,vocab}`. On the current
 data: ~1.15 tokens/word for known TP, byte-fallback for arbitrary names.
 Special-token IDs: `<pad>=0 <unk>=1 <bos>=2 <eos>=3`.
 

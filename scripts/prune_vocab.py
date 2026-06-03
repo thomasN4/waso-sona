@@ -11,7 +11,7 @@ Workflow:
    kept set.
 4. Filter ``tokenizer.json``'s ``vocab`` and ``merges`` to drop entries
    referencing pruned IDs, renumbering by the new contiguous index.
-5. Save the pruned base under ``data/training/base-pruned/`` and verify
+5. Save the pruned base under ``models/base-pruned/`` and verify
    by round-tripping a corpus sample.
 
 Pure CPU; loads the base in bf16 (~5 GB RAM) for the one-shot slice.
@@ -44,7 +44,7 @@ from train_qlora import MINIMAL_CHAT_TEMPLATE, MODEL_ID  # noqa: E402
 DEFAULT_CORPUS = REPO_ROOT / "data/processed/corpus.filtered.jsonl"
 DEFAULT_SFT_TRAIN = REPO_ROOT / "data/processed/sft_train.jsonl"
 DEFAULT_SFT_VAL = REPO_ROOT / "data/processed/sft_val.jsonl"
-DEFAULT_OUT = REPO_ROOT / "data/training/base-pruned"
+DEFAULT_OUT = REPO_ROOT / "models/base-pruned"
 
 
 # ---------------------------------------------------------------------------

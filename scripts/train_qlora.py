@@ -3,7 +3,7 @@
 Inputs:
     data/processed/sft_train.jsonl, sft_val.jsonl   (from build_sft_dataset.py)
 Outputs:
-    data/training/runs/<utc-timestamp>/
+    models/runs/<utc-timestamp>/
         run_config.json               # config snapshot (written before training)
         checkpoints/                  # HF Trainer-managed, save_total_limit=3
         final/                        # best PEFT adapter (≈ 100–200 MB)
@@ -66,7 +66,7 @@ import augment_corpus  # noqa: E402  (for sample-gen prompts)
 
 DEFAULT_TRAIN = REPO_ROOT / "data" / "processed" / "sft_train.jsonl"
 DEFAULT_VAL = REPO_ROOT / "data" / "processed" / "sft_val.jsonl"
-DEFAULT_RUNS_DIR = REPO_ROOT / "data" / "training" / "runs"
+DEFAULT_RUNS_DIR = REPO_ROOT / "models" / "runs"
 MODEL_ID = "google/gemma-4-E2B-it"
 
 # Renders byte-identically to Gemma 4's stock chat template but exposes
@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--val", type=Path, default=DEFAULT_VAL)
     ap.add_argument("--model-id", default=MODEL_ID)
     ap.add_argument("--run-dir", type=Path, default=None,
-                    help="output dir; default data/training/runs/qlora-<UTC>")
+                    help="output dir; default models/runs/qlora-<UTC>")
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     ap.add_argument("--max-seq-length", type=int, default=160,

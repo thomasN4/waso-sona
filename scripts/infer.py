@@ -1,7 +1,7 @@
 """Generate from the QLoRA fine-tuned Gemma 4 adapter.
 
 By default loads the most recent run's `final/` adapter from
-`data/training/runs/qlora-*`, wraps a seed sentence in the same
+`models/runs/qlora-*`, wraps a seed sentence in the same
 `_continuation_prompt` shape used during SFT, and prints the generated
 text. With `--compare-base`, generates with the adapter disabled too so
 you can see what the fine-tune actually changed.
@@ -21,7 +21,7 @@ Usage::
     python scripts/infer.py --compare-base
 
     # Pin a specific adapter
-    python scripts/infer.py --adapter data/training/runs/qlora-20260526T203942Z/final
+    python scripts/infer.py --adapter models/runs/qlora-20260526T203942Z/final
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import augment_corpus  # noqa: E402  (for _continuation_prompt + _paraphrase_prompt)
 
-DEFAULT_RUNS_DIR = REPO_ROOT / "data" / "training" / "runs"
+DEFAULT_RUNS_DIR = REPO_ROOT / "models" / "runs"
 DEFAULT_BASE_MODEL = "google/gemma-4-E2B-it"
 DEFAULT_SEED_SENTENCE = "mi lon tomo mi. tenpo pimeja li kama."
 

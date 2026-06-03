@@ -220,3 +220,6 @@ __marimo__/
 # Toki Pona corpora fetched by scripts/fetch_data.py
 data/
 
+# Model artifacts: QLoRA runs, merged checkpoints, GGUF, student runs, tokenizer
+models/
+

@@ -8,7 +8,7 @@ Usage::
 
     python scripts/talk_to_student.py
     python scripts/talk_to_student.py --prompt "tenpo suno ni la" --ucsur
-    python scripts/talk_to_student.py --checkpoint data/training/student_runs/student-<UTC>/best.pt
+    python scripts/talk_to_student.py --checkpoint models/student_runs/student-<UTC>/best.pt
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from train_student import ModelConfig, TinyTPLM  # noqa: E402
 
-DEFAULT_TOKENIZER = REPO_ROOT / "data" / "training" / "student_tokenizer" / "spm.model"
-DEFAULT_RUNS = REPO_ROOT / "data" / "training" / "student_runs"
+DEFAULT_TOKENIZER = REPO_ROOT / "models" / "student_tokenizer" / "spm.model"
+DEFAULT_RUNS = REPO_ROOT / "models" / "student_runs"
 
 
 def latest_checkpoint() -> Path:

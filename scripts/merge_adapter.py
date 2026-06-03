@@ -9,9 +9,9 @@ template), not the base.
 Usage::
 
     python scripts/merge_adapter.py \
-        --adapter data/training/runs/qlora-<...>/final \
+        --adapter models/runs/qlora-<...>/final \
         --base google/gemma-4-E2B-it \
-        --out  data/training/merged/<label>
+        --out  models/merged/<label>
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def main() -> int:
 
     base = args.base
     if "/" in base and not base.startswith(("google/", "meta-", "Qwen", "mistral")):
-        # treat as a local path (e.g. data/training/base-pruned)
+        # treat as a local path (e.g. models/base-pruned)
         p = Path(base)
         base = str(p if p.is_absolute() else (REPO_ROOT / p))
 

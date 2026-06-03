@@ -22,7 +22,7 @@ from pathlib import Path
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNS_DIR = REPO_ROOT / "data" / "training" / "runs"
+RUNS_DIR = REPO_ROOT / "models" / "runs"
 DEFAULT_PREV = RUNS_DIR / "qlora-20260526T205328Z"
 
 WATCH_TAGS = ("eval/loss", "train/loss", "train/grad_norm", "train/learning_rate")

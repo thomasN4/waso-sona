@@ -4,7 +4,7 @@ Trains on synthetic.jsonl (Stage 2 output) + a sample of the real filtered
 corpus. Vocab is small (~2k) because Toki Pona's working vocabulary is tiny;
 this gives ~1 token/word for known TP and byte-fallback for proper nouns.
 
-Output: data/training/student_tokenizer/spm.model and spm.vocab.
+Output: models/student_tokenizer/spm.model and spm.vocab.
 
 Usage::
 
@@ -23,7 +23,7 @@ import sentencepiece as spm
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SYNTHETIC = REPO_ROOT / "data" / "processed" / "synthetic.jsonl"
 DEFAULT_REAL = REPO_ROOT / "data" / "processed" / "corpus.filtered.jsonl"
-DEFAULT_OUT = REPO_ROOT / "data" / "training" / "student_tokenizer"
+DEFAULT_OUT = REPO_ROOT / "models" / "student_tokenizer"
 
 
 def _write_training_text(synthetic: Path, real: Path, out_txt: Path,

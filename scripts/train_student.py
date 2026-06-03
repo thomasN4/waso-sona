@@ -38,8 +38,8 @@ import sentencepiece as spm
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SYNTHETIC = REPO_ROOT / "data" / "processed" / "synthetic.jsonl"
 DEFAULT_REAL = REPO_ROOT / "data" / "processed" / "corpus.filtered.jsonl"
-DEFAULT_TOKENIZER = REPO_ROOT / "data" / "training" / "student_tokenizer" / "spm.model"
-DEFAULT_RUNS_DIR = REPO_ROOT / "data" / "training" / "student_runs"
+DEFAULT_TOKENIZER = REPO_ROOT / "models" / "student_tokenizer" / "spm.model"
+DEFAULT_RUNS_DIR = REPO_ROOT / "models" / "student_runs"
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--real", type=Path, default=DEFAULT_REAL)
     ap.add_argument("--tokenizer", type=Path, default=DEFAULT_TOKENIZER)
     ap.add_argument("--run-dir", type=Path, default=None,
-                    help="output dir (default: data/training/student_runs/student-<UTC>)")
+                    help="output dir (default: models/student_runs/student-<UTC>)")
     ap.add_argument("--n-layer", type=int, default=6)
     ap.add_argument("--n-head", type=int, default=4)
     ap.add_argument("--n-embd", type=int, default=256)
