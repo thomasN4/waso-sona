@@ -16,7 +16,6 @@ mod tracker;
 
 use app::AppState;
 use cosmic::CosmicTracker;
-use cosmic_client_toolkit::toplevel_info::ToplevelInfoState;
 use smithay_client_toolkit::{
     compositor::{CompositorState, Region},
     output::OutputState,
@@ -45,9 +44,13 @@ fn main() {
 
     // One layer surface that fills the output. The compositor picks the output
     // (single-output for now); the configure event reports the real size.
+    //
+    // `Overlay` (not `Top`) so the bird stays above all normal windows: several
+    // compositors raise focused/newly-mapped windows above the `Top` layer, but
+    // the `Overlay` layer sits above the whole normal window stack.
     let surface = compositor.create_surface(&qh);
     let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("desktop-bird"), None);
+        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("desktop-bird"), None);
     layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
     layer.set_exclusive_zone(-1); // don't reserve space / push other windows
     layer.set_keyboard_interactivity(KeyboardInteractivity::None); // never steal focus
@@ -73,7 +76,7 @@ fn main() {
         .contents()
         .with_list(|globals| globals.iter().any(|g| g.interface == "zcosmic_toplevel_info_v1"));
     let tracker = if has_cosmic {
-        ToplevelInfoState::try_new(&registry_state, &qh).map(CosmicTracker::new)
+        CosmicTracker::bind(&registry_state, &qh)
     } else {
         eprintln!(
             "desktop-bird: no cosmic-toplevel-info global; window tracking disabled (bird will wander)"

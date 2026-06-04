@@ -8,11 +8,6 @@
 use std::num::NonZeroU32;
 use std::time::Instant;
 
-use cosmic_client_toolkit::{
-    delegate_toplevel_info,
-    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
-};
-use cosmic_client_toolkit::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, Region},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
@@ -61,8 +56,9 @@ pub struct AppState {
     /// Bird rect drawn in the previous frame, for damage union.
     prev_rect: Option<Rect>,
     /// Active-window source. `None` when not on COSMIC (the bird just wanders;
-    /// the KWin backend lands in a later slice).
-    tracker: Option<CosmicTracker>,
+    /// the KWin backend lands in a later slice). Updated by the `Dispatch` impls
+    /// in `cosmic.rs`, hence `pub(crate)`.
+    pub(crate) tracker: Option<CosmicTracker>,
 }
 
 impl AppState {
@@ -268,53 +264,6 @@ impl ShmHandler for AppState {
     }
 }
 
-impl ToplevelInfoHandler for AppState {
-    fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
-        // Only reached while toplevel events are flowing, which requires a
-        // tracker (its globals were bound in `main`).
-        &mut self
-            .tracker
-            .as_mut()
-            .expect("toplevel events arrived without a COSMIC tracker")
-            .info_state
-    }
-
-    fn new_toplevel(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-        self.refresh_tracker();
-    }
-
-    fn update_toplevel(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-        self.refresh_tracker();
-    }
-
-    fn toplevel_closed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _toplevel: &ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
-    ) {
-        self.refresh_tracker();
-    }
-}
-
-impl AppState {
-    fn refresh_tracker(&mut self) {
-        if let Some(tracker) = self.tracker.as_mut() {
-            tracker.refresh();
-        }
-    }
-}
-
 /// Where the bird should sit to perch on `window`: centred on its top edge,
 /// feet at the edge. Bounds clamping happens in `Wander::fly_to`.
 fn perch_target(window: &WindowInfo, sprite_w: u32, sprite_h: u32) -> (f32, f32) {
@@ -336,4 +285,4 @@ delegate_output!(AppState);
 delegate_shm!(AppState);
 delegate_layer!(AppState);
 delegate_registry!(AppState);
-delegate_toplevel_info!(AppState);
+// The COSMIC toplevel-info `Dispatch` impls live in `cosmic.rs`.
