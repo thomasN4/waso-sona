@@ -8,8 +8,8 @@
 //! (Plasma 6) and cosmic-comp (COSMIC).
 
 mod app;
+mod brain;
 mod cosmic;
-mod motion;
 mod render;
 mod sprite;
 mod tracker;

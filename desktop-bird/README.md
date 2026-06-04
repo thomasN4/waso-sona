@@ -13,6 +13,8 @@ Wayland-protocol reasoning behind it.
 - **Slice 2 — COSMIC window tracker (done).** On COSMIC, the bird reads the
   active window's geometry from `cosmic-toplevel-info` and perches on its top
   edge; off COSMIC it falls back to wandering. KWin tracking is next.
+- **Slice 3 — BirdBrain state machine (done).** Wander / Approach / Perch / Flit
+  behaviour with per-state animations; unit-tested headless. See *Behaviour*.
 
 ## Licensing
 
@@ -35,12 +37,17 @@ windows underneath, and it never takes keyboard focus.
 
 ### Custom sprite (optional)
 
-By default a procedurally generated placeholder bird is used. To use real art,
-point at a directory of PNG animation frames (sorted by filename, all the same
-size; the bird should face **right**):
+By default a procedurally generated placeholder bird is used (distinct idle / fly
+/ perch poses). To use real art, set `BIRD_SPRITE_DIR`; the bird should face
+**right** and all frames must share one canvas size. Two layouts are accepted:
 
 ```sh
-BIRD_SPRITE_DIR=/path/to/frames cargo run --release
+# Per-state: one subdir per animation, each a set of PNGs sorted by filename.
+# Missing subdirs fall back to another clip. (This is where vector poses go.)
+BIRD_SPRITE_DIR=/path/to/art   # art/idle/*.png  art/fly/*.png  art/perch/*.png
+
+# Flat: a single directory of PNGs, used as one clip for every state.
+BIRD_SPRITE_DIR=/path/to/frames
 ```
 
 ## Layout
@@ -50,8 +57,8 @@ BIRD_SPRITE_DIR=/path/to/frames cargo run --release
 | `src/main.rs` | Wayland bring-up: bind globals, create the layer surface, set anchors / empty input region, run the dispatch loop. |
 | `src/app.rs` | `AppState` + SCTK delegate impls; per-frame tick and damage-tracked draw. |
 | `src/render.rs` | `Rect` math and the RGBA→premultiplied-BGRA sprite blit. |
-| `src/sprite.rs` | `Sprite`/`Frame`, the placeholder bird, and the PNG-frame loader. |
-| `src/motion.rs` | `Wander` — placeholder motion (stand-in for the future shared `BirdBrain`). |
+| `src/sprite.rs` | `Sprite`/`Frame`/`Clip`, per-state `AnimId` clips, placeholder art, PNG loader. |
+| `src/brain.rs` | `BirdBrain` — the behaviour state machine (+ headless unit tests). |
 | `src/tracker.rs` | `WindowTracker` trait + `WindowInfo` — the per-compositor abstraction. |
 | `src/cosmic.rs` | `CosmicTracker` — generated bindings + `Dispatch` for cosmic-toplevel-info. |
 | `protocols/` | Vendored HPND protocol XML, compiled by `wayland-scanner`. |
@@ -70,10 +77,30 @@ disabled and the bird wanders.
 > The KWin backend (a `.kwinscript` pushing geometry over **D-Bus**) *will* need
 > a second event source — that's when the loop moves to `calloop`.
 
+## Behaviour (`BirdBrain`)
+
+```
+Wander   (no active window): roam to random points, with occasional idle pauses
+   └─ window appears ───────────────────────────────> Approach
+Approach (fly to the perch on the window's top edge)
+   └─ arrived ──────────────────────────────────────> Perch
+Perch    (sit; follow small window moves; idle/fidget anim)
+   ├─ flit timer (~4–10 s) ─────────────────────────> Flit
+   └─ window jumps far ─────────────────────────────> Approach
+Flit     (short hop near the window)
+   └─ arrived ──────────────────────────────────────> Approach (back to perch)
+(any state) window gone ─────────────────────────────> Wander
+```
+
+`BirdBrain` is pure logic (`update(dt, Option<&WindowInfo>)` → position / facing /
+`pose()`), so it is unit-tested headless — `cargo test` covers perch, re-approach
+on a window jump, return-to-wander, and the flit cycle.
+
 ## How it renders
 
-One output-sized `Argb8888` (premultiplied BGRA) layer surface on the `Top`
-layer, anchored to all four edges with `exclusive_zone = -1`. The bird is painted
+One output-sized `Argb8888` (premultiplied BGRA) layer surface on the `Overlay`
+layer (above all normal windows), anchored to all four edges with
+`exclusive_zone = -1`. The bird is painted
 at an `(x, y)` offset; each frame the buffer is cleared (so undamaged regions are
 correctly transparent) and only the bird's old+new bounding boxes are damaged, so
 the compositor re-uploads just a small region. An empty `wl_region` input region
@@ -83,8 +110,8 @@ makes the whole surface click-through.
 
 - **KWin `WindowTracker` backend**: ship a `.kwinscript` that pushes
   `frameGeometry` over D-Bus (the COSMIC backend already exists). Needs `calloop`.
-- Real **`BirdBrain`** state machine (fly-to / perch / wander) driven by tracker
-  geometry, replacing the interim perch logic in `app.rs`.
+- **Vector art** for the idle / fly / perch clips (drops into the per-state
+  `BIRD_SPRITE_DIR` layout); optional takeoff/land transition states.
 - Multi-output (per-output surfaces + coordinate translation).
 - Optional draggable/pettable bird (sprite-shaped, non-empty input region).
 

@@ -25,15 +25,11 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
+use crate::brain::BirdBrain;
 use crate::cosmic::CosmicTracker;
-use crate::motion::Wander;
 use crate::render::{self, Rect};
 use crate::sprite::Sprite;
-use crate::tracker::{WindowInfo, WindowTracker};
-
-/// Wing-flap animation rate (frames per second).
-const ANIM_FPS: f32 = 8.0;
-const ANIM_DT: f32 = 1.0 / ANIM_FPS;
+use crate::tracker::WindowTracker;
 
 pub struct AppState {
     pub registry_state: RegistryState,
@@ -50,9 +46,8 @@ pub struct AppState {
     configured: bool,
 
     sprite: Sprite,
-    motion: Wander,
+    brain: BirdBrain,
     last_frame: Instant,
-    anim_accum: f32,
     /// Bird rect drawn in the previous frame, for damage union.
     prev_rect: Option<Rect>,
     /// Active-window source. `None` when not on COSMIC (the bird just wanders;
@@ -85,9 +80,8 @@ impl AppState {
             height: 0,
             configured: false,
             sprite,
-            motion: Wander::new(),
+            brain: BirdBrain::new(),
             last_frame: Instant::now(),
-            anim_accum: 0.0,
             prev_rect: None,
             tracker,
         }
@@ -99,26 +93,11 @@ impl AppState {
         let dt = (now - self.last_frame).as_secs_f32().min(0.25); // clamp after stalls
         self.last_frame = now;
 
-        // Interim behaviour to prove the tracker end-to-end: perch on the active
-        // window's top edge when we know it, otherwise wander. The real fly /
-        // perch / idle state machine (BirdBrain) is a later slice.
-        let frame = self.sprite.current_frame();
-        let (sw, sh) = (frame.w, frame.h);
-        match self.tracker.as_ref().and_then(|t| t.active_window()) {
-            Some(window) => {
-                let (px, py) = perch_target(&window, sw, sh);
-                self.motion.fly_to(px, py);
-            }
-            None => self.motion.wander(),
-        }
+        let active = self.tracker.as_ref().and_then(|t| t.active_window());
+        self.brain.update(dt, active.as_ref());
 
-        self.motion.update(dt);
-
-        self.anim_accum += dt;
-        while self.anim_accum >= ANIM_DT {
-            self.anim_accum -= ANIM_DT;
-            self.sprite.advance();
-        }
+        self.sprite.set_anim(self.brain.pose());
+        self.sprite.advance(dt);
 
         self.draw(qh);
     }
@@ -141,8 +120,8 @@ impl AppState {
         canvas.fill(0);
 
         let frame = self.sprite.current_frame();
-        let (px, py) = self.motion.position();
-        let flip = self.motion.facing_left();
+        let (px, py) = self.brain.position();
+        let flip = self.brain.facing_left();
         render::blit(canvas, w, h, frame, px, py, flip);
 
         let new_rect =
@@ -235,8 +214,8 @@ impl LayerShellHandler for AppState {
         self.height = new_h;
 
         if size_changed && self.width > 0 && self.height > 0 {
-            let frame = self.sprite.current_frame();
-            self.motion.set_bounds(self.width, self.height, frame.w, frame.h);
+            let (sw, sh) = self.sprite.frame_size();
+            self.brain.set_bounds(self.width, self.height, sw, sh);
             self.prev_rect = None; // dimensions changed; force a clean redraw
         }
 
@@ -262,15 +241,6 @@ impl ShmHandler for AppState {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
-}
-
-/// Where the bird should sit to perch on `window`: centred on its top edge,
-/// feet at the edge. Bounds clamping happens in `Wander::fly_to`.
-fn perch_target(window: &WindowInfo, sprite_w: u32, sprite_h: u32) -> (f32, f32) {
-    let g = window.geometry;
-    let x = g.x as f32 + g.w as f32 / 2.0 - sprite_w as f32 / 2.0;
-    let y = g.y as f32 - sprite_h as f32;
-    (x, y)
 }
 
 impl ProvidesRegistryState for AppState {

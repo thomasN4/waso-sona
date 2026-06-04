@@ -1,74 +1,182 @@
-//! Bird sprite: animation frames plus a procedural placeholder so the renderer
-//! is demonstrable without any art assets yet (see RESEARCH.md open question #7).
+//! Bird sprite: per-state animation clips plus procedural placeholders so the
+//! renderer is demonstrable without art assets yet.
 //!
-//! Real art can be dropped in later as a directory of PNG frames; set
-//! `BIRD_SPRITE_DIR=/path/to/frames` and they are loaded instead of the
-//! placeholder. Frames are sorted by filename and must all share one size.
+//! The `BirdBrain` (`brain.rs`) picks an [`AnimId`] each frame; the `Sprite`
+//! plays the matching clip. Real art drops in via `BIRD_SPRITE_DIR`:
+//!   - per-state layout: `idle/`, `fly/`, `perch/` subdirs, each a set of PNGs
+//!     sorted by filename (this is where the upcoming vector poses go);
+//!   - or a flat directory of PNGs, used as a single clip for every state.
+//!
+//! All frames must share one canvas size.
 
+use std::collections::HashMap;
 use std::path::Path;
 
+/// Which animation to play; selected by `BirdBrain::pose`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AnimId {
+    Idle,
+    Fly,
+    Perch,
+}
+
+impl AnimId {
+    const ALL: [AnimId; 3] = [AnimId::Idle, AnimId::Fly, AnimId::Perch];
+
+    fn subdir(self) -> &'static str {
+        match self {
+            AnimId::Idle => "idle",
+            AnimId::Fly => "fly",
+            AnimId::Perch => "perch",
+        }
+    }
+
+    /// Default playback rate (frames/sec) for the procedural + flat loaders.
+    fn default_fps(self) -> f32 {
+        match self {
+            AnimId::Idle => 3.0,
+            AnimId::Fly => 8.0,
+            AnimId::Perch => 2.0,
+        }
+    }
+}
+
 /// A single animation frame as straight (non-premultiplied) `RGBA8`.
+#[derive(Clone)]
 pub struct Frame {
     pub w: u32,
     pub h: u32,
     pub pixels: Vec<u8>,
 }
 
-/// An animated sprite that faces **right** by default.
-pub struct Sprite {
+/// One looping animation clip.
+#[derive(Clone)]
+struct Clip {
     frames: Vec<Frame>,
+    fps: f32,
+}
+
+/// An animated sprite (faces **right** by default) with playback state.
+pub struct Sprite {
+    clips: HashMap<AnimId, Clip>, // always fully populated (missing ones aliased)
+    current: AnimId,
     idx: usize,
+    accum: f32,
 }
 
 impl Sprite {
+    /// Build from three clips, populating all `AnimId`s.
+    fn from_clips(idle: Clip, fly: Clip, perch: Clip) -> Sprite {
+        let mut clips = HashMap::new();
+        clips.insert(AnimId::Idle, idle);
+        clips.insert(AnimId::Fly, fly);
+        clips.insert(AnimId::Perch, perch);
+        Sprite { clips, current: AnimId::Idle, idx: 0, accum: 0.0 }
+    }
+
+    /// Switch to a clip, restarting it if it actually changed.
+    pub fn set_anim(&mut self, id: AnimId) {
+        if id != self.current {
+            self.current = id;
+            self.idx = 0;
+            self.accum = 0.0;
+        }
+    }
+
+    /// Advance playback by `dt` seconds using the current clip's frame rate.
+    pub fn advance(&mut self, dt: f32) {
+        let clip = &self.clips[&self.current];
+        if clip.frames.len() <= 1 || clip.fps <= 0.0 {
+            return;
+        }
+        let frame_time = 1.0 / clip.fps;
+        self.accum += dt;
+        while self.accum >= frame_time {
+            self.accum -= frame_time;
+            self.idx = (self.idx + 1) % clip.frames.len();
+        }
+    }
+
     pub fn current_frame(&self) -> &Frame {
-        &self.frames[self.idx]
+        let clip = &self.clips[&self.current];
+        &clip.frames[self.idx.min(clip.frames.len() - 1)]
     }
 
-    /// Advance to the next animation frame (wraps around).
-    pub fn advance(&mut self) {
-        self.idx = (self.idx + 1) % self.frames.len();
+    /// Canvas size shared by all frames (used for bounds/perch math).
+    pub fn frame_size(&self) -> (u32, u32) {
+        let f = &self.clips[&AnimId::Idle].frames[0];
+        (f.w, f.h)
     }
 
-    /// Load PNG frames if `BIRD_SPRITE_DIR` is set and usable; otherwise `None`
-    /// so the caller can fall back to [`Sprite::placeholder`].
+    /// Load clips if `BIRD_SPRITE_DIR` is set and usable, else `None` so the
+    /// caller falls back to [`Sprite::placeholder`].
     pub fn load_from_env() -> Option<Sprite> {
         let dir = std::env::var_os("BIRD_SPRITE_DIR")?;
-        match Sprite::load_png_frames(Path::new(&dir)) {
+        match Sprite::load_dir(Path::new(&dir)) {
             Ok(sprite) => Some(sprite),
             Err(err) => {
-                eprintln!("desktop-bird: failed to load BIRD_SPRITE_DIR sprites: {err}; using placeholder");
+                eprintln!("desktop-bird: failed to load BIRD_SPRITE_DIR: {err}; using placeholder");
                 None
             }
         }
     }
 
-    /// Load every `*.png` in `dir`, sorted by filename, as animation frames.
-    pub fn load_png_frames(dir: &Path) -> Result<Sprite, String> {
-        let mut paths: Vec<_> = std::fs::read_dir(dir)
-            .map_err(|e| format!("read_dir {}: {e}", dir.display()))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")))
-            .collect();
-        paths.sort();
-        if paths.is_empty() {
-            return Err(format!("no .png frames in {}", dir.display()));
+    /// Load from a directory: per-state subdirs if present, else a flat dir as a
+    /// single clip used for every state.
+    pub fn load_dir(dir: &Path) -> Result<Sprite, String> {
+        let has_subdirs = AnimId::ALL.iter().any(|a| dir.join(a.subdir()).is_dir());
+
+        if has_subdirs {
+            // Load whichever subdirs exist; alias missing ones to a present clip.
+            let load = |id: AnimId| -> Option<Clip> {
+                let p = dir.join(id.subdir());
+                p.is_dir().then(|| load_clip(&p, id.default_fps())).and_then(Result::ok)
+            };
+            let idle = load(AnimId::Idle);
+            let fly = load(AnimId::Fly);
+            let perch = load(AnimId::Perch);
+
+            let idle_c = idle.clone().or_else(|| fly.clone()).or_else(|| perch.clone());
+            let idle_c = idle_c.ok_or_else(|| format!("no usable clip subdirs in {}", dir.display()))?;
+            let fly_c = fly.unwrap_or_else(|| idle_c.clone());
+            let perch_c = perch.unwrap_or_else(|| idle_c.clone());
+            Ok(Sprite::from_clips(idle_c, fly_c, perch_c))
+        } else {
+            let clip = load_clip(dir, AnimId::Fly.default_fps())?;
+            Ok(Sprite::from_clips(clip.clone(), clip.clone(), clip))
         }
-        let mut frames = Vec::with_capacity(paths.len());
-        for path in paths {
-            let img = image::open(&path)
-                .map_err(|e| format!("decode {}: {e}", path.display()))?
-                .to_rgba8();
-            let (w, h) = img.dimensions();
-            frames.push(Frame { w, h, pixels: img.into_raw() });
-        }
-        Ok(Sprite { frames, idx: 0 })
     }
 
-    /// A tiny hand-drawn placeholder bird with a two-frame wing flap.
+    /// A tiny hand-drawn placeholder bird with distinct idle / fly / perch clips.
     pub fn placeholder() -> Sprite {
-        Sprite { frames: vec![placeholder_frame(false), placeholder_frame(true)], idx: 0 }
+        // wing centre-y per pose; bigger swing = flapping.
+        let fly = Clip { frames: vec![bird_frame(8.0), bird_frame(14.0)], fps: 8.0 };
+        let idle = Clip { frames: vec![bird_frame(11.5), bird_frame(12.5)], fps: 3.0 };
+        let perch = Clip { frames: vec![bird_frame(12.5)], fps: 2.0 };
+        Sprite::from_clips(idle, fly, perch)
     }
+}
+
+/// Load a directory of PNGs (sorted by filename) into a clip.
+fn load_clip(dir: &Path, fps: f32) -> Result<Clip, String> {
+    let mut paths: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| format!("read_dir {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")))
+        .collect();
+    paths.sort();
+    if paths.is_empty() {
+        return Err(format!("no .png frames in {}", dir.display()));
+    }
+    let mut frames = Vec::with_capacity(paths.len());
+    for path in paths {
+        let img = image::open(&path)
+            .map_err(|e| format!("decode {}: {e}", path.display()))?
+            .to_rgba8();
+        let (w, h) = img.dimensions();
+        frames.push(Frame { w, h, pixels: img.into_raw() });
+    }
+    Ok(Clip { frames, fps })
 }
 
 // --- placeholder art ------------------------------------------------------
@@ -82,8 +190,9 @@ const WING: [u8; 4] = [92, 112, 156, 255]; // lighter blue
 const BEAK: [u8; 4] = [230, 150, 40, 255]; // orange
 const EYE: [u8; 4] = [20, 20, 28, 255]; // near-black
 
-/// Draw the placeholder bird; `wing_down` picks the flap pose.
-fn placeholder_frame(wing_down: bool) -> Frame {
+/// Draw the placeholder bird with the wing oval centred at `wing_cy` (lets us
+/// build flap / folded poses from one routine).
+fn bird_frame(wing_cy: f32) -> Frame {
     let mut px = vec![0u8; (PW * PH * 4) as usize];
     let mut put = |x: i32, y: i32, c: [u8; 4]| {
         if x >= 0 && y >= 0 && (x as u32) < PW && (y as u32) < PH {
@@ -116,8 +225,7 @@ fn placeholder_frame(wing_down: bool) -> Frame {
         }
     }
 
-    // Wing: an oval over the body that lifts/drops between frames.
-    let wing_cy = if wing_down { 14.0 } else { 8.0 };
+    // Wing: an oval over the body whose height selects the pose.
     ellipse(10.0, wing_cy, 5.0, 2.5, WING, &mut put);
 
     // Beak (small triangle) and eye on the head.
