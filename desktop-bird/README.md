@@ -50,6 +50,16 @@ BIRD_SPRITE_DIR=/path/to/art   # art/idle/*.png  art/fly/*.png  art/perch/*.png
 BIRD_SPRITE_DIR=/path/to/frames
 ```
 
+The code-generated placeholder is also checked in as PNGs at
+[`assets/sprites/placeholder/`](assets/sprites/placeholder) (per-state layout), so
+you can edit/replace them directly and run with
+`BIRD_SPRITE_DIR=assets/sprites/placeholder`. Regenerate them from the procedural
+source any time with:
+
+```sh
+cargo run -- --export-sprites assets/sprites/placeholder
+```
+
 ## Layout
 
 | File | Responsibility |

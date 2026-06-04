@@ -30,6 +30,22 @@ use sprite::Sprite;
 use wayland_client::{globals::registry_queue_init, Connection};
 
 fn main() {
+    // `--export-sprites [dir]` dumps the procedural placeholder frames to PNGs in
+    // the per-state BIRD_SPRITE_DIR layout, then exits (no Wayland needed). Edit
+    // those PNGs and run with BIRD_SPRITE_DIR pointing at them to swap the art.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--export-sprites") {
+        let dir = args.next().unwrap_or_else(|| "assets/sprites/placeholder".into());
+        match Sprite::placeholder().write_png_frames(std::path::Path::new(&dir)) {
+            Ok(()) => println!("desktop-bird: wrote placeholder sprite frames to {dir}"),
+            Err(err) => {
+                eprintln!("desktop-bird: sprite export failed: {err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     let conn = Connection::connect_to_env()
         .expect("failed to connect to a Wayland compositor (is WAYLAND_DISPLAY set?)");
 

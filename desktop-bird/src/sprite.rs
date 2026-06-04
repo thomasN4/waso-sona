@@ -147,6 +147,23 @@ impl Sprite {
         }
     }
 
+    /// Write every clip's frames as PNGs under `dir/<anim>/NN.png` — the same
+    /// per-state layout [`load_dir`] reads back. Lets the code-generated
+    /// placeholder be snapshotted to disk and later swapped for real art.
+    pub fn write_png_frames(&self, dir: &Path) -> Result<(), String> {
+        for id in AnimId::ALL {
+            let sub = dir.join(id.subdir());
+            std::fs::create_dir_all(&sub).map_err(|e| format!("create {}: {e}", sub.display()))?;
+            for (i, frame) in self.clips[&id].frames.iter().enumerate() {
+                let path = sub.join(format!("{i:02}.png"));
+                let img = image::RgbaImage::from_raw(frame.w, frame.h, frame.pixels.clone())
+                    .ok_or_else(|| format!("bad frame buffer for {}", path.display()))?;
+                img.save(&path).map_err(|e| format!("save {}: {e}", path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
     /// A tiny hand-drawn placeholder bird with distinct idle / fly / perch clips.
     pub fn placeholder() -> Sprite {
         // wing centre-y per pose; bigger swing = flapping.
