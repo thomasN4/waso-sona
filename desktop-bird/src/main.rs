@@ -9,6 +9,7 @@
 
 mod app;
 mod brain;
+mod bubble;
 mod cosmic;
 mod render;
 mod sprite;
@@ -100,6 +101,13 @@ fn main() {
         None
     };
 
+    // Channel for pushing speech bubbles from the model thread.
+    // The sender is cloneable and Send; hand it to the Toki Pona model when
+    // that is wired up.  For now it sits unused until the model slice lands.
+    let (bubble_tx, bubble_rx) = bubble::channel();
+    // Suppress the unused-variable warning until the model thread is added.
+    let _ = bubble_tx;
+
     let mut state = AppState::new(
         registry_state,
         OutputState::new(&globals, &qh),
@@ -109,6 +117,7 @@ fn main() {
         region,
         sprite,
         tracker,
+        bubble_rx,
     );
 
     loop {

@@ -25,7 +25,10 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
+use std::sync::mpsc::Receiver;
+
 use crate::brain::BirdBrain;
+use crate::bubble::BubbleState;
 use crate::cosmic::CosmicTracker;
 use crate::render::{self, Rect};
 use crate::sprite::Sprite;
@@ -48,12 +51,16 @@ pub struct AppState {
     sprite: Sprite,
     brain: BirdBrain,
     last_frame: Instant,
-    /// Bird rect drawn in the previous frame, for damage union.
+    /// Dirty rect from the previous frame (bird + any bubble), for damage union.
     prev_rect: Option<Rect>,
     /// Active-window source. `None` when not on COSMIC (the bird just wanders;
     /// the KWin backend lands in a later slice). Updated by the `Dispatch` impls
     /// in `cosmic.rs`, hence `pub(crate)`.
     pub(crate) tracker: Option<CosmicTracker>,
+    /// Currently displayed speech bubble, if any.
+    bubble: Option<BubbleState>,
+    /// Incoming `(text, duration_secs)` messages from the model thread.
+    bubble_rx: Receiver<(String, f32)>,
 }
 
 impl AppState {
@@ -67,6 +74,7 @@ impl AppState {
         input_region: Region,
         sprite: Sprite,
         tracker: Option<CosmicTracker>,
+        bubble_rx: Receiver<(String, f32)>,
     ) -> Self {
         AppState {
             registry_state,
@@ -84,7 +92,16 @@ impl AppState {
             last_frame: Instant::now(),
             prev_rect: None,
             tracker,
+            bubble: None,
+            bubble_rx,
         }
+    }
+
+    /// Show a speech bubble above the bird for `duration` seconds.
+    ///
+    /// Replaces any bubble that is already showing.
+    pub fn say(&mut self, text: impl Into<String>, duration: f32) {
+        self.bubble = Some(BubbleState { text: text.into(), remaining: duration });
     }
 
     /// Advance simulation + animation by elapsed wall-clock time, then redraw.
@@ -98,6 +115,17 @@ impl AppState {
 
         self.sprite.set_anim(self.brain.pose());
         self.sprite.advance(dt);
+
+        // Accept the most-recent queued bubble message (drain the channel,
+        // keep last), then tick the active bubble.
+        while let Ok((text, duration)) = self.bubble_rx.try_recv() {
+            self.bubble = Some(BubbleState { text, remaining: duration });
+        }
+        if let Some(b) = &mut self.bubble {
+            if !b.tick(dt) {
+                self.bubble = None;
+            }
+        }
 
         self.draw(qh);
     }
@@ -124,8 +152,20 @@ impl AppState {
         let flip = self.brain.facing_left();
         render::blit(canvas, w, h, frame, px, py, flip);
 
-        let new_rect =
-            Rect { x: px, y: py, w: frame.w as i32, h: frame.h as i32 }.clamp(w, h);
+        let bird_rect = Rect { x: px, y: py, w: frame.w as i32, h: frame.h as i32 };
+
+        // Draw the speech bubble (if any) and extend the dirty region.
+        let new_rect = if let Some(bubble) = &self.bubble {
+            let bubble_rect = render::draw_bubble(
+                canvas, w, h,
+                &bubble.text,
+                px, py, frame.w as i32, frame.h as i32,
+            );
+            bird_rect.union(&bubble_rect).clamp(w, h)
+        } else {
+            bird_rect.clamp(w, h)
+        };
+
         let damage = match self.prev_rect {
             Some(prev) => prev.union(&new_rect).clamp(w, h),
             None => new_rect,
