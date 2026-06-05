@@ -1,0 +1,120 @@
+//! desktop-bird — shared Wayland layer-shell renderer.
+//!
+//! Puts a transparent, click-through bird on the desktop and flies it around
+//! with a placeholder wander. No window tracking yet — that (perching on the
+//! active window) is the next slice and is per-compositor (see RESEARCH.md).
+//!
+//! Works on any compositor that implements wlr-layer-shell — notably KWin
+//! (Plasma 6) and cosmic-comp (COSMIC).
+
+mod app;
+mod brain;
+mod cosmic;
+mod render;
+mod sprite;
+mod tracker;
+
+use app::AppState;
+use cosmic::CosmicTracker;
+use smithay_client_toolkit::{
+    compositor::{CompositorState, Region},
+    output::OutputState,
+    registry::RegistryState,
+    shell::{
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell},
+        WaylandSurface,
+    },
+    shm::{slot::SlotPool, Shm},
+};
+use sprite::Sprite;
+use wayland_client::{globals::registry_queue_init, Connection};
+
+fn main() {
+    // `--export-sprites [dir]` dumps the procedural placeholder frames to PNGs in
+    // the per-state BIRD_SPRITE_DIR layout, then exits (no Wayland needed). Edit
+    // those PNGs and run with BIRD_SPRITE_DIR pointing at them to swap the art.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--export-sprites") {
+        let dir = args.next().unwrap_or_else(|| "assets/sprites/placeholder".into());
+        match Sprite::placeholder().write_png_frames(std::path::Path::new(&dir)) {
+            Ok(()) => println!("desktop-bird: wrote placeholder sprite frames to {dir}"),
+            Err(err) => {
+                eprintln!("desktop-bird: sprite export failed: {err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    let conn = Connection::connect_to_env()
+        .expect("failed to connect to a Wayland compositor (is WAYLAND_DISPLAY set?)");
+
+    let (globals, mut event_queue) =
+        registry_queue_init(&conn).expect("failed to initialise the Wayland registry");
+    let qh = event_queue.handle();
+
+    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor is not available");
+    let layer_shell = LayerShell::bind(&globals, &qh)
+        .expect("wlr-layer-shell is not available (need KWin, cosmic-comp, or another wlroots-style compositor)");
+    let shm = Shm::bind(&globals, &qh).expect("wl_shm is not available");
+
+    // One layer surface that fills the output. The compositor picks the output
+    // (single-output for now); the configure event reports the real size.
+    //
+    // `Overlay` (not `Top`) so the bird stays above all normal windows: several
+    // compositors raise focused/newly-mapped windows above the `Top` layer, but
+    // the `Overlay` layer sits above the whole normal window stack.
+    let surface = compositor.create_surface(&qh);
+    let layer =
+        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("desktop-bird"), None);
+    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+    layer.set_exclusive_zone(-1); // don't reserve space / push other windows
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None); // never steal focus
+
+    // An empty input region makes every pointer event pass through to the
+    // windows underneath — the bird is purely decorative for now.
+    let region = Region::new(&compositor).expect("failed to create wl_region");
+    layer.wl_surface().set_input_region(Some(region.wl_region()));
+
+    // Initial commit with no buffer; the compositor replies with a configure.
+    layer.commit();
+
+    // SlotPool grows on demand; seed it with a common full-HD-sized buffer.
+    let pool = SlotPool::new(1920 * 1080 * 4, &shm).expect("failed to create the shm pool");
+
+    let sprite = Sprite::load_from_env().unwrap_or_else(Sprite::placeholder);
+
+    let registry_state = RegistryState::new(&globals);
+
+    // COSMIC advertises cosmic-toplevel-info; that's our active-window source.
+    // Elsewhere (e.g. KWin) the bird just wanders until the KWin backend lands.
+    let has_cosmic = globals
+        .contents()
+        .with_list(|globals| globals.iter().any(|g| g.interface == "zcosmic_toplevel_info_v1"));
+    let tracker = if has_cosmic {
+        CosmicTracker::bind(&registry_state, &qh)
+    } else {
+        eprintln!(
+            "desktop-bird: no cosmic-toplevel-info global; window tracking disabled (bird will wander)"
+        );
+        None
+    };
+
+    let mut state = AppState::new(
+        registry_state,
+        OutputState::new(&globals, &qh),
+        shm,
+        pool,
+        layer,
+        region,
+        sprite,
+        tracker,
+    );
+
+    loop {
+        event_queue.blocking_dispatch(&mut state).expect("Wayland dispatch failed");
+        if state.exit {
+            break;
+        }
+    }
+}
