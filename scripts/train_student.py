@@ -1,8 +1,9 @@
 """Train the from-scratch tiny Toki Pona LM (Stage 3 — the deliverable).
 
-A nanoGPT-style decoder-only transformer (~5M params default), trained on the
-synthetic corpus produced by Stage 2 (data/processed/synthetic.jsonl), with an
-optional held-out slice of the real corpus for a more honest val signal.
+A nanoGPT-style decoder-only transformer (~5M params default). By default it
+trains on a mix of the real corpus (primary) + the Stage 2 v2 translated corpus
+(new content) + the v1 synthetic corpus (grammar), holding out a fixed slice of
+real docs for an honest real_loss. `--synthetic-only` reproduces the v1 run.
 
 Minimal PyTorch loop — no HF Trainer / no quantization / no chat template;
 from-scratch training has different needs than the QLoRA teacher pipeline.
@@ -37,6 +38,7 @@ import sentencepiece as spm
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SYNTHETIC = REPO_ROOT / "data" / "processed" / "synthetic.jsonl"
+DEFAULT_TRANSLATED = REPO_ROOT / "data" / "processed" / "translated.jsonl"
 DEFAULT_REAL = REPO_ROOT / "data" / "processed" / "corpus.filtered.jsonl"
 DEFAULT_TOKENIZER = REPO_ROOT / "models" / "student_tokenizer" / "spm.model"
 DEFAULT_RUNS_DIR = REPO_ROOT / "models" / "student_runs"
@@ -259,6 +261,7 @@ def lr_at(step, *, peak_lr, warmup_steps, max_steps, min_ratio=0.1):
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--synthetic", type=Path, default=DEFAULT_SYNTHETIC)
+    ap.add_argument("--translated", type=Path, default=DEFAULT_TRANSLATED)
     ap.add_argument("--real", type=Path, default=DEFAULT_REAL)
     ap.add_argument("--tokenizer", type=Path, default=DEFAULT_TOKENIZER)
     ap.add_argument("--run-dir", type=Path, default=None,
@@ -279,12 +282,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--early-stop-patience", type=int, default=6,
                     help="stop after N consecutive evals without val improvement (0 disables)")
     ap.add_argument("--early-stop-min-delta", type=float, default=1e-3,
-                    help="min syn_val decrease to count as an improvement")
+                    help="min val decrease to count as an improvement")
     ap.add_argument("--save-steps", type=int, default=1000)
     ap.add_argument("--sample-steps", type=int, default=1000)
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--real-eval-docs", type=int, default=200,
-                    help="N docs of real corpus to use as a held-out 'honest' eval")
+                    help="N docs of real corpus held out for the honest eval "
+                         "(same slice as v1, for a comparable real_loss)")
+    ap.add_argument("--synthetic-only", action="store_true",
+                    help="v1 behavior: train on synthetic only (real eval-only). "
+                         "Default mixes real(primary)+translated+synthetic.")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--dtype", choices=["fp32", "bf16"], default="bf16")
@@ -328,15 +335,32 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Tokenizer: vocab={vocab_size} bos={bos_id} eos={eos_id} pad={pad_id}",
           flush=True)
 
-    # Data: tokenize → stream. Split synthetic into train/val by record.
-    print(f"Loading {args.synthetic}…", flush=True)
-    syn_texts = _load_synthetic_texts(args.synthetic)
-    print(f"  synthetic records: {len(syn_texts):,}", flush=True)
-    n_val = max(1, int(len(syn_texts) * args.val_frac))
+    # Data. Hold out the first --real-eval-docs real docs for the honest eval
+    # (same deterministic slice as v1 → comparable real_loss); the remaining
+    # real docs are training data. The train pool mixes real (primary) +
+    # translated (new content) + v1 synthetic (grammar), unless --synthetic-only.
+    real_all = _load_real_texts(args.real) if args.real.exists() else []
+    real_eval_texts = real_all[: args.real_eval_docs]
+    real_train_texts = real_all[args.real_eval_docs:]
+    syn_texts = _load_synthetic_texts(args.synthetic) if args.synthetic.exists() else []
+    trans_texts = _load_synthetic_texts(args.translated) if args.translated.exists() else []
+
+    if args.synthetic_only:
+        pool = list(syn_texts)
+        print(f"Train pool (synthetic-only): {len(pool):,} records", flush=True)
+    else:
+        pool = real_train_texts + trans_texts + syn_texts
+        print(f"Train pool: real={len(real_train_texts):,} + "
+              f"translated={len(trans_texts):,} + synthetic={len(syn_texts):,} "
+              f"= {len(pool):,} records", flush=True)
+
+    # Shuffle the pool, then hold out --val-frac for the in-training val signal.
     rng = torch.Generator().manual_seed(args.seed)
-    perm = torch.randperm(len(syn_texts), generator=rng).tolist()
-    val_texts = [syn_texts[i] for i in perm[:n_val]]
-    train_texts = [syn_texts[i] for i in perm[n_val:]]
+    perm = torch.randperm(len(pool), generator=rng).tolist()
+    pool = [pool[i] for i in perm]
+    n_val = max(1, int(len(pool) * args.val_frac))
+    val_texts = pool[:n_val]
+    train_texts = pool[n_val:]
     print(f"  split: train={len(train_texts):,} val={len(val_texts):,}", flush=True)
 
     train_stream = _build_stream(sp, train_texts, bos_id, eos_id)
@@ -344,13 +368,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  train tokens: {train_stream.numel():,}", flush=True)
     print(f"  val tokens:   {val_stream.numel():,}", flush=True)
 
-    # Real held-out (honest eval, not from teacher's distribution).
+    # Real held-out (honest eval — the same slice v1 reported real_loss on).
     real_stream = None
-    if args.real.exists() and args.real_eval_docs > 0:
-        real_texts = _load_real_texts(args.real, args.real_eval_docs)
-        real_stream = _build_stream(sp, real_texts, bos_id, eos_id)
+    if real_eval_texts:
+        real_stream = _build_stream(sp, real_eval_texts, bos_id, eos_id)
         print(f"  real-eval tokens: {real_stream.numel():,} "
-              f"({len(real_texts)} docs)", flush=True)
+              f"({len(real_eval_texts)} docs)", flush=True)
 
     # Model
     cfg = ModelConfig(
@@ -407,8 +430,8 @@ def main(argv: list[str] | None = None) -> int:
         if step > 0 and (step % args.eval_steps == 0 or step == args.max_steps - 1):
             val = eval_loss(model, val_stream, args.batch_size, args.block_size,
                             args.eval_batches, device, sample_gen)
-            writer.add_scalar("eval/syn_loss", val, step)
-            line = f"  eval @ {step}: syn_val={val:.4f}"
+            writer.add_scalar("eval/val_loss", val, step)
+            line = f"  eval @ {step}: val={val:.4f}"
             if real_stream is not None and real_stream.numel() > args.block_size + 1:
                 rval = eval_loss(model, real_stream, args.batch_size,
                                  args.block_size, args.eval_batches, device,
@@ -427,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
             print(line, flush=True)
             if args.early_stop_patience > 0 and stale_evals >= args.early_stop_patience:
                 stopped_step = step
-                print(f"  early stop @ {step}: no syn_val improvement "
+                print(f"  early stop @ {step}: no val improvement "
                       f"for {stale_evals} evals (best={best_val:.4f})", flush=True)
                 break
 
@@ -452,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     writer.close()
     reason = f"early stop @ {stopped_step}" if stopped_step is not None \
         else f"reached max_steps ({args.max_steps})"
-    print(f"\nDone ({reason}). best syn_val={best_val:.4f}", flush=True)
+    print(f"\nDone ({reason}). best val={best_val:.4f}", flush=True)
     return 0
 
 
