@@ -15,11 +15,12 @@ Three stages:
 2. **Augment.** Use the fine-tuned Gemma to expand the corpus. *v1 (done)*
    paraphrases + continues real sentences — but that only recombines existing
    TP and saturated *below* the real corpus's size (see "Stage 2 v2"). *v2
-   (planned)* translates diverse English into TP to inject genuinely new
-   content.
+   (done)* translates diverse English into TP via a `waso-translator`, injecting
+   265k new-content TP sentences (2.63 M words).
 3. **Student (built — the actual product).** Train the tiny TP LM **from
-   scratch** (nanoGPT-style decoder, ~5.4 M params, SP-BPE vocab 2048). First
-   full run completed 2026-06-02.
+   scratch** (nanoGPT-style decoder, ~5.4 M params, SP-BPE vocab 2048). Training
+   on the real+translated+synthetic mix dropped the honest `real_loss` ~4.0 →
+   2.16 (2026-06-05).
 
 ```
   Stage 1 — TEACHER (built)
@@ -39,7 +40,7 @@ Three stages:
 
   Stage 2 — AUGMENT
         │  v1 (done):    augment_corpus.py    — paraphrase + continuation of real TP
-        │  v2 (planned): translate_corpus.py  — waso-translator turns English → TP
+        │  v2 (done):    translate_corpus.py  — waso-translator turns English → TP
         ▼
     augmented corpus  (real + synthetic TP; v2 adds new-content TP from English)
 
@@ -59,20 +60,20 @@ student — **only ever sees Latin-script Toki Pona**. UCSUR (sitelen pona) is a
 display concern handled deterministically by the `sitelen/` package on the way
 in and out — see [`sitelen/translate.py`](sitelen/translate.py).
 
-**Current state:** Stages 1 and 3 are built; Stage 2 has a working v1 and a
-planned v2. Stage 1 (the QLoRA teacher) is documented across the "Data sources
-/ preprocessing" and "Training: train_qlora.py" sections. Stage 2 v1
-(`augment_corpus.py` → `waso-teacher` over Ollama with global dedup) is in
-"Stage 2 serving" + the bench reference; the 30k-seed run produced **201,567
-records / 1.82 M words ≈ 1.9 M SentencePiece tokens** (the "~25.9 M tokens"
-quoted in earlier notes was the teacher's gross `eval_count` across all 8
-calls/seed, ~93 % of it discarded by truncation + dedup — *not* the trainable
-corpus size). That is *smaller* than the 3.16 M-token real corpus and
-recombines only ~1,800 word-forms, so a translation-based **Stage 2 v2** is
-planned to add genuine content (see "Stage 2 v2 — Translation augmentation").
+**Current state:** All stages built. Stage 1 (the QLoRA teacher) is documented
+across the "Data sources / preprocessing" and "Training: train_qlora.py"
+sections. Stage 2 v1 (`augment_corpus.py` → `waso-teacher` over Ollama with
+global dedup) produced **201,567 records / 1.82 M words ≈ 1.9 M SentencePiece
+tokens** (the "~25.9 M tokens" in earlier notes was the teacher's gross
+`eval_count`, ~93 % discarded by truncation + dedup — *not* trainable size) —
+*smaller* than the 3.16 M-token real corpus and only ~1,800 word-forms, which
+motivated **Stage 2 v2**. Stage 2 v2 (built 2026-06-05) trains a standalone
+`waso-translator` and translates 300k simple English sentences into **265,477
+new TP sentences / 2.63 M words** (see "Stage 2 v2 — Translation augmentation").
 Stage 3 (`train_tokenizer.py`, `train_student.py`, `talk_to_student.py` — the
-deliverable) is in "Stage 3 — Student"; its first full training run completed
-2026-06-02 (early-stopped ~step 7000, best syn_val 1.73, real_val ~4.0).
+deliverable) first trained synthetic-only (2026-06-02, real_val ~4.0); retraining
+on the real+translated+synthetic mix (2026-06-05) dropped the honest **real_loss
+to 2.16** with the val↔real gap collapsed — the student now models real TP.
 
 ---
 
@@ -481,7 +482,31 @@ the HF + 4-bit path — the reason bulk augmentation goes through GGUF/Ollama.
 
 ---
 
-## Stage 2 v2 — Translation augmentation (planned)
+## Stage 2 v2 — Translation augmentation (built)
+
+**Built (2026-06-05).** Pipeline: `build_translation_pairs.py` →
+`build_sft_dataset.py --translation-only` → `train_qlora.py` → merge → GGUF →
+**standalone `waso-translator`** (Ollama) → `build_english_source.py` →
+`translate_corpus.py` → student retrain. Measured results:
+- **Translator gate** (`eval_translator.py`, 500 held-out *unseen-English*
+  pairs): chrF **68.6**, **99.0 %** valid TP, 0 % copied/empty — genuine
+  translation of novel English, not recall.
+- **Translated corpus**: 300k simple English (≈82 % Tatoeba-without-TP-link /
+  ≈18 % Simple-English Wikipedia) → **265,477** unique TP sentences /
+  **2.63 M words** (≈97 % pilot acceptance) — *larger* than the 2.3 M-word real
+  corpus, and genuinely new content (Algeria, the Bible, horses…).
+- **Student payoff**: retraining on **real + translated + v1-synthetic** (8.44 M
+  train tokens vs v1's 2.17 M; same tokenizer + architecture for a clean A/B)
+  dropped the honest **`real_loss` ~4.0 → 2.16**, and the val↔real gap collapsed
+  — the student now models real TP, not just the teacher's distribution.
+  Early-stopped at step 18000 (vs v1's 7000).
+- Deviations from the plan below: a **standalone** `waso-translator` (not a 4th
+  teacher task); the shared prompt is `_translate_prompt`; a dedicated
+  `scripts/build_english_source.py` builds the source pool; the translate-loop
+  rejects are `empty` / `copied_source` (leftover English surfaces as
+  `_filter_sentence`'s `unknown_word`).
+
+The design, as planned (still accurate):
 
 **Why v1 hit a wall.** Paraphrase + continuation can only *recombine* Toki Pona
 that already exists — the teacher conditions on a TP seed and emits more TP from
@@ -595,11 +620,11 @@ renders the output through `sitelen.translate.latin_to_ucsur` for sitelen
 pona display. The student itself only ever sees Latin script; UCSUR is the
 application layer wrapping it, exactly as the diagram in the intro shows.
 
-### Status (2026-06-02)
-All three scripts exist; a CPU smoke train of `train_student.py` passes
-end-to-end (loss descends, eval + sample-gen + checkpoint all work). The
-30k-seed bulk augmentation completed — `synthetic.jsonl` now holds
-**201,567 records / 1.82 M word-tokens / ~25.9 M Ollama-tokens** with
+### Status (2026-06-05)
+All three scripts exist and have run end-to-end. The 30k-seed v1 bulk
+augmentation produced `synthetic.jsonl` — **201,567 records / 1.82 M word-tokens
+≈ 1.9 M SP-tokens** (the "~25.9 M Ollama-tokens" sometimes quoted is the
+teacher's gross `eval_count`, ~93 % discarded — *not* trainable size) with
 **1,121 unique TP words** (per-record `distinct-2 = 0.987`, no internal
 looping; balanced ~99k continuation / ~102k paraphrase).
 
@@ -614,7 +639,10 @@ dup-rate-vs-seeds knee predicted at ~30 k landed at ~30 k. Going further
 would yield diminishing unique-record returns — for the targeted ~25 M
 tokens this is the right stopping point.
 
-Next: re-run `train_tokenizer.py` over the bigger corpus → run
-`train_student.py` (~20k steps, plausibly an hour or two on the RTX 5060)
-→ eyeball
-generations via `talk_to_student.py`.
+**Two student runs.** v1 (2026-06-02): trained synthetic-only, early-stopped
+~step 7000, best syn_val 1.73 but honest **real_val ~4.0** — the model fit the
+teacher's distribution, not real TP. v2 (2026-06-05): retrained on the
+**real + translated + v1-synthetic** mix (8.44 M train tokens; same tokenizer +
+architecture), early-stopped step 18000, **real_loss 2.16** with the val↔real
+gap collapsed (see "Stage 2 v2"). The v2 checkpoint is the current deliverable;
+generations are markedly more worldly (e.g. `mi toki lon toki Kanse`).
