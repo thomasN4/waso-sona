@@ -17,10 +17,15 @@ the English). Leftover English shows up as `_filter_sentence`'s `unknown_word`.
 
 Output: data/processed/translated.jsonl (appended) — {source, eng, text}.
 
+Defaults are tuned from bench_translate.py: no few-shot + num_predict 24 +
+concurrency 8. The big throughput lever is the *server* — set
+`OLLAMA_NUM_PARALLEL` (see scripts/enable_ollama_parallel.sh) so Ollama
+continuously batches; otherwise it serializes and concurrency does nothing.
+
 Usage::
 
     python scripts/translate_corpus.py --max-sentences 2000   # pilot
-    python scripts/translate_corpus.py --concurrency 4         # bulk
+    python scripts/translate_corpus.py --concurrency 16        # bulk (batched server)
 """
 from __future__ import annotations
 
@@ -45,11 +50,13 @@ DEFAULT_OUTPUT = REPO_ROOT / "data" / "processed" / "translated.jsonl"
 
 
 def _translate_one(
-    eng: str, model: str, max_tokens: int, repeat_penalty: float, repeat_last_n: int,
+    eng: str, model: str, max_tokens: int, repeat_penalty: float,
+    repeat_last_n: int, fewshot: bool,
 ) -> tuple[dict | None, str, int]:
     """Translate one English sentence. Returns (record_or_None, reason, tokens)."""
     text, toks = ac._ollama_generate(
-        ac._translate_prompt(eng), model, max_tokens, repeat_penalty, repeat_last_n)
+        ac._translate_prompt(eng, fewshot=fewshot), model, max_tokens,
+        repeat_penalty, repeat_last_n)
     sents = ac._split_into_sentences(text)
     if not sents:
         return None, "empty", toks
@@ -69,9 +76,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument("--max-sentences", type=int, default=None,
                     help="cap source sentences processed this run (pilot)")
-    ap.add_argument("--concurrency", type=int, default=2)
-    ap.add_argument("--limit-output-tokens", type=int, default=48,
-                    help="Ollama num_predict cap (translations are short)")
+    ap.add_argument("--concurrency", type=int, default=8,
+                    help="client parallel requests (pairs with the server's "
+                         "OLLAMA_NUM_PARALLEL; 1 if the server is serialized)")
+    ap.add_argument("--limit-output-tokens", type=int, default=24,
+                    help="Ollama num_predict cap (translations are ~10 tokens; "
+                         "benchmarked free vs 48 — the rest was rambling)")
+    ap.add_argument("--fewshot", action="store_true",
+                    help="include the in-prompt few-shot block. Off by default: "
+                         "the fine-tuned translator doesn't need it and dropping "
+                         "it cuts prefill at no quality cost (chrF 67.7→68.1).")
     ap.add_argument("--repeat-penalty", type=float, default=1.1)
     ap.add_argument("--repeat-last-n", type=int, default=64)
     args = ap.parse_args(argv)
@@ -121,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     def _work(eng: str):
         try:
             return _translate_one(eng, args.model, args.limit_output_tokens,
-                                  args.repeat_penalty, args.repeat_last_n)
+                                  args.repeat_penalty, args.repeat_last_n,
+                                  args.fewshot)
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             return None, f"api_error:{type(exc).__name__}", 0
 
