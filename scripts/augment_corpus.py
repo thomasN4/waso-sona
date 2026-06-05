@@ -110,12 +110,15 @@ def _continuation_prompt(seed: str) -> str:
     )
 
 
-def _translate_prompt(english: str) -> str:
+def _translate_prompt(english: str, fewshot: bool = True) -> str:
+    examples = (
+        "Here are examples of English → Toki Pona translation:\n"
+        f"{_translate_fewshot_block()}\n\n"
+    ) if fewshot else ""
     return (
         "You are an assistant who translates English into Toki Pona. "
         "Output only Toki Pona text — no English, no markdown, no labels.\n\n"
-        "Here are examples of English → Toki Pona translation:\n"
-        f"{_translate_fewshot_block()}\n\n"
+        f"{examples}"
         "Translate the following English sentence into Toki Pona:\n"
         f"{english}\n\n"
         "Output only the Toki Pona translation, nothing else."
