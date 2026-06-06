@@ -9,7 +9,9 @@
 
 mod app;
 mod brain;
+mod bubble;
 mod cosmic;
+mod font;
 mod render;
 mod sprite;
 mod tracker;
@@ -30,16 +32,34 @@ use sprite::Sprite;
 use wayland_client::{globals::registry_queue_init, Connection};
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
     // `--export-sprites [dir]` dumps the procedural placeholder frames to PNGs in
     // the per-state BIRD_SPRITE_DIR layout, then exits (no Wayland needed). Edit
     // those PNGs and run with BIRD_SPRITE_DIR pointing at them to swap the art.
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("--export-sprites") {
-        let dir = args.next().unwrap_or_else(|| "assets/sprites/placeholder".into());
-        match Sprite::placeholder().write_png_frames(std::path::Path::new(&dir)) {
+    if args.first().map(String::as_str) == Some("--export-sprites") {
+        let dir = args.get(1).map_or("assets/sprites/placeholder", String::as_str);
+        match Sprite::placeholder().write_png_frames(std::path::Path::new(dir)) {
             Ok(()) => println!("desktop-bird: wrote placeholder sprite frames to {dir}"),
             Err(err) => {
                 eprintln!("desktop-bird: sprite export failed: {err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // `--preview <ucsur-text> [out.png]` renders the talking bird with a speech
+    // bubble to a PNG and exits (no Wayland needed) — a quick way to eyeball the
+    // sitelen-pona rendering. The text must already be UCSUR (the Python side
+    // owns Latin→UCSUR); e.g. `python desktop-bird/demo.py | head -1` gives one.
+    if args.first().map(String::as_str) == Some("--preview") {
+        let text = args.get(1).map_or("", String::as_str);
+        let out = args.get(2).map_or("preview.png", String::as_str);
+        match write_preview(text, std::path::Path::new(out)) {
+            Ok(()) => println!("desktop-bird: wrote bubble preview to {out}"),
+            Err(err) => {
+                eprintln!("desktop-bird: preview failed: {err}");
                 std::process::exit(1);
             }
         }
@@ -100,6 +120,30 @@ fn main() {
         None
     };
 
+    // Speech bubbles are fed from stdin: one bubble per line, UTF-8 sitelen
+    // pona (UCSUR) text, optionally `<text>\t<seconds>`. A reader thread parses
+    // lines and forwards them to the renderer over the bubble channel; the main
+    // Wayland loop drains it without blocking. This is the seam the Python side
+    // pipes into — e.g. `python desktop-bird/demo.py | desktop-bird`, and later
+    // the Toki Pona model (Latin out → sitelen.latin_to_ucsur → here).
+    let (bubble_tx, bubble_rx) = bubble::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break }; // stdin closed / read error
+            let (text, secs) = match line.split_once('\t') {
+                Some((t, s)) => (t.trim(), s.trim().parse::<f32>().unwrap_or(4.0)),
+                None => (line.trim(), 4.0),
+            };
+            if text.is_empty() {
+                continue;
+            }
+            if bubble_tx.send((text.to_string(), secs)).is_err() {
+                break; // receiver dropped — the app is exiting
+            }
+        }
+    });
+
     let mut state = AppState::new(
         registry_state,
         OutputState::new(&globals, &qh),
@@ -109,6 +153,7 @@ fn main() {
         region,
         sprite,
         tracker,
+        bubble_rx,
     );
 
     loop {
@@ -117,4 +162,46 @@ fn main() {
             break;
         }
     }
+}
+
+/// Render the talking bird with a speech bubble into a PNG (no Wayland needed).
+/// `text` is UCSUR sitelen pona; empty falls back to a built-in sample.
+fn write_preview(text: &str, out: &std::path::Path) -> Result<(), String> {
+    use sprite::AnimId;
+
+    // Default sample: "mi moku e kili" already in UCSUR (the Python side owns
+    // Latin→UCSUR; this literal is just so `--preview` works with no argument).
+    let text = if text.is_empty() { "\u{F1934} \u{F1936} \u{F1909} \u{F191A}" } else { text };
+
+    const W: u32 = 420;
+    const H: u32 = 220;
+    let mut canvas = vec![0u8; (W * H * 4) as usize];
+
+    // Talking bird near the lower centre, stepped to its beak-open frame.
+    let mut sprite = Sprite::placeholder();
+    sprite.set_anim(AnimId::Talk);
+    sprite.advance(1.0 / 6.0);
+    let frame = sprite.current_frame();
+    let (fw, fh) = (frame.w as i32, frame.h as i32);
+    let bird_x = W as i32 / 2 - fw / 2;
+    let bird_y = H as i32 - fh - 20;
+    render::blit(&mut canvas, W, H, frame, bird_x, bird_y, false);
+
+    // Speech bubble above it.
+    let _ = render::draw_bubble(&mut canvas, W, H, text, bird_x, bird_y, fw, fh);
+
+    // Convert premultiplied BGRA → straight RGBA for a PNG with alpha.
+    let mut rgba = vec![0u8; canvas.len()];
+    for i in (0..canvas.len()).step_by(4) {
+        let (b, g, r, a) = (canvas[i], canvas[i + 1], canvas[i + 2], canvas[i + 3]);
+        let unpremul = |c: u8| {
+            if a == 0 { 0 } else { ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8 }
+        };
+        rgba[i] = unpremul(r);
+        rgba[i + 1] = unpremul(g);
+        rgba[i + 2] = unpremul(b);
+        rgba[i + 3] = a;
+    }
+    let img = image::RgbaImage::from_raw(W, H, rgba).ok_or("bad canvas buffer")?;
+    img.save(out).map_err(|e| format!("save {}: {e}", out.display()))
 }

@@ -3,8 +3,8 @@
 //!
 //! The `BirdBrain` (`brain.rs`) picks an [`AnimId`] each frame; the `Sprite`
 //! plays the matching clip. Real art drops in via `BIRD_SPRITE_DIR`:
-//!   - per-state layout: `idle/`, `fly/`, `perch/` subdirs, each a set of PNGs
-//!     sorted by filename (this is where the upcoming vector poses go);
+//!   - per-state layout: `idle/`, `fly/`, `perch/`, `talk/` subdirs, each a set
+//!     of PNGs sorted by filename (this is where the upcoming vector poses go);
 //!   - or a flat directory of PNGs, used as a single clip for every state.
 //!
 //! All frames must share one canvas size.
@@ -18,16 +18,19 @@ pub enum AnimId {
     Idle,
     Fly,
     Perch,
+    /// Played while a speech bubble is showing (beak opens/closes — chirping).
+    Talk,
 }
 
 impl AnimId {
-    const ALL: [AnimId; 3] = [AnimId::Idle, AnimId::Fly, AnimId::Perch];
+    const ALL: [AnimId; 4] = [AnimId::Idle, AnimId::Fly, AnimId::Perch, AnimId::Talk];
 
     fn subdir(self) -> &'static str {
         match self {
             AnimId::Idle => "idle",
             AnimId::Fly => "fly",
             AnimId::Perch => "perch",
+            AnimId::Talk => "talk",
         }
     }
 
@@ -37,6 +40,7 @@ impl AnimId {
             AnimId::Idle => 3.0,
             AnimId::Fly => 8.0,
             AnimId::Perch => 2.0,
+            AnimId::Talk => 6.0,
         }
     }
 }
@@ -65,12 +69,13 @@ pub struct Sprite {
 }
 
 impl Sprite {
-    /// Build from three clips, populating all `AnimId`s.
-    fn from_clips(idle: Clip, fly: Clip, perch: Clip) -> Sprite {
+    /// Build from the four clips, populating all `AnimId`s.
+    fn from_clips(idle: Clip, fly: Clip, perch: Clip, talk: Clip) -> Sprite {
         let mut clips = HashMap::new();
         clips.insert(AnimId::Idle, idle);
         clips.insert(AnimId::Fly, fly);
         clips.insert(AnimId::Perch, perch);
+        clips.insert(AnimId::Talk, talk);
         Sprite { clips, current: AnimId::Idle, idx: 0, accum: 0.0 }
     }
 
@@ -136,14 +141,17 @@ impl Sprite {
             let fly = load(AnimId::Fly);
             let perch = load(AnimId::Perch);
 
+            let talk = load(AnimId::Talk);
+
             let idle_c = idle.clone().or_else(|| fly.clone()).or_else(|| perch.clone());
             let idle_c = idle_c.ok_or_else(|| format!("no usable clip subdirs in {}", dir.display()))?;
             let fly_c = fly.unwrap_or_else(|| idle_c.clone());
             let perch_c = perch.unwrap_or_else(|| idle_c.clone());
-            Ok(Sprite::from_clips(idle_c, fly_c, perch_c))
+            let talk_c = talk.unwrap_or_else(|| idle_c.clone());
+            Ok(Sprite::from_clips(idle_c, fly_c, perch_c, talk_c))
         } else {
             let clip = load_clip(dir, AnimId::Fly.default_fps())?;
-            Ok(Sprite::from_clips(clip.clone(), clip.clone(), clip))
+            Ok(Sprite::from_clips(clip.clone(), clip.clone(), clip.clone(), clip))
         }
     }
 
@@ -164,13 +172,16 @@ impl Sprite {
         Ok(())
     }
 
-    /// A tiny hand-drawn placeholder bird with distinct idle / fly / perch clips.
+    /// A tiny hand-drawn placeholder bird with distinct idle / fly / perch /
+    /// talk clips.
     pub fn placeholder() -> Sprite {
         // wing centre-y per pose; bigger swing = flapping.
-        let fly = Clip { frames: vec![bird_frame(8.0), bird_frame(14.0)], fps: 8.0 };
-        let idle = Clip { frames: vec![bird_frame(11.5), bird_frame(12.5)], fps: 3.0 };
-        let perch = Clip { frames: vec![bird_frame(12.5)], fps: 2.0 };
-        Sprite::from_clips(idle, fly, perch)
+        let fly = Clip { frames: vec![bird_frame(8.0, false), bird_frame(14.0, false)], fps: 8.0 };
+        let idle = Clip { frames: vec![bird_frame(11.5, false), bird_frame(12.5, false)], fps: 3.0 };
+        let perch = Clip { frames: vec![bird_frame(12.5, false)], fps: 2.0 };
+        // Talk: body still (idle wing height), beak opening and closing.
+        let talk = Clip { frames: vec![bird_frame(12.5, false), bird_frame(12.5, true)], fps: 6.0 };
+        Sprite::from_clips(idle, fly, perch, talk)
     }
 }
 
@@ -208,8 +219,9 @@ const BEAK: [u8; 4] = [230, 150, 40, 255]; // orange
 const EYE: [u8; 4] = [20, 20, 28, 255]; // near-black
 
 /// Draw the placeholder bird with the wing oval centred at `wing_cy` (lets us
-/// build flap / folded poses from one routine).
-fn bird_frame(wing_cy: f32) -> Frame {
+/// build flap / folded poses from one routine). When `beak_open` is set the
+/// beak splits into two mandibles with a gap, so the bird reads as chirping.
+fn bird_frame(wing_cy: f32, beak_open: bool) -> Frame {
     let mut px = vec![0u8; (PW * PH * 4) as usize];
     let mut put = |x: i32, y: i32, c: [u8; 4]| {
         if x >= 0 && y >= 0 && (x as u32) < PW && (y as u32) < PH {
@@ -245,10 +257,22 @@ fn bird_frame(wing_cy: f32) -> Frame {
     // Wing: an oval over the body whose height selects the pose.
     ellipse(10.0, wing_cy, 5.0, 2.5, WING, &mut put);
 
-    // Beak (small triangle) and eye on the head.
-    for d in 0..3 {
-        for y in (7 - d)..=(7 + d) {
-            put(24 + d, y, BEAK);
+    // Beak on the head, facing right. Closed: one wedge centred on y=7. Open:
+    // two wedges (upper/lower mandible) with a gap at y=7.
+    if beak_open {
+        for d in 0..3 {
+            for y in (6 - d)..=6 {
+                put(24 + d, y, BEAK);
+            }
+            for y in 8..=(8 + d) {
+                put(24 + d, y, BEAK);
+            }
+        }
+    } else {
+        for d in 0..3 {
+            for y in (7 - d)..=(7 + d) {
+                put(24 + d, y, BEAK);
+            }
         }
     }
     put(21, 7, EYE);
