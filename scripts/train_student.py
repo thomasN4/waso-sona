@@ -292,6 +292,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--synthetic-only", action="store_true",
                     help="v1 behavior: train on synthetic only (real eval-only). "
                          "Default mixes real(primary)+translated+synthetic.")
+    ap.add_argument("--real-weight", type=int, default=1,
+                    help="repeat the real corpus N× in the pool (upsample the "
+                         "high-quality human TP so a large translated corpus "
+                         "doesn't drown it; e.g. 6 to restore a ~1:1 real:translated mix)")
+    ap.add_argument("--synth-weight", type=int, default=1,
+                    help="repeat the v1 synthetic corpus N× in the pool")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--dtype", choices=["fp32", "bf16"], default="bf16")
@@ -349,9 +355,11 @@ def main(argv: list[str] | None = None) -> int:
         pool = list(syn_texts)
         print(f"Train pool (synthetic-only): {len(pool):,} records", flush=True)
     else:
-        pool = real_train_texts + trans_texts + syn_texts
-        print(f"Train pool: real={len(real_train_texts):,} + "
-              f"translated={len(trans_texts):,} + synthetic={len(syn_texts):,} "
+        pool = (real_train_texts * args.real_weight + trans_texts
+                + syn_texts * args.synth_weight)
+        print(f"Train pool: real={len(real_train_texts):,}×{args.real_weight} + "
+              f"translated={len(trans_texts):,} + "
+              f"synthetic={len(syn_texts):,}×{args.synth_weight} "
               f"= {len(pool):,} records", flush=True)
 
     # Shuffle the pool, then hold out --val-frac for the in-training val signal.
