@@ -18,9 +18,9 @@ Three stages:
    (done)* translates diverse English into TP via a `waso-translator`, injecting
    265k new-content TP sentences (2.63 M words).
 3. **Student (built — the actual product).** Train the tiny TP LM **from
-   scratch** (nanoGPT-style decoder, ~5.4 M params, SP-BPE vocab 2048). Training
-   on the real+translated+synthetic mix dropped the honest `real_loss` ~4.0 →
-   2.16 (2026-06-05).
+   scratch** (nanoGPT-style decoder). Training on the real+translated+synthetic
+   mix dropped the honest `real_loss` from ~4.0 (synthetic-only) → 2.16 → **2.08**
+   with a balance-corrected 15 M-param model (see "Student runs").
 
 ```
   Stage 1 — TEACHER (built)
@@ -71,9 +71,10 @@ motivated **Stage 2 v2**. Stage 2 v2 (built 2026-06-05) trains a standalone
 `waso-translator` and translates 300k simple English sentences into **265,477
 new TP sentences / 2.63 M words** (see "Stage 2 v2 — Translation augmentation").
 Stage 3 (`train_tokenizer.py`, `train_student.py`, `talk_to_student.py` — the
-deliverable) first trained synthetic-only (2026-06-02, real_val ~4.0); retraining
-on the real+translated+synthetic mix (2026-06-05) dropped the honest **real_loss
-to 2.16** with the val↔real gap collapsed — the student now models real TP.
+deliverable) first trained synthetic-only (2026-06-02, real_val ~4.0); the
+real+translated+synthetic mix dropped the honest **real_loss to 2.16**, and a
+balance-corrected 15 M-param model on the scaled corpus reached **2.08** — the
+student now models real TP (see "Student runs" for the volume-vs-balance lesson).
 
 ---
 
@@ -639,10 +640,30 @@ dup-rate-vs-seeds knee predicted at ~30 k landed at ~30 k. Going further
 would yield diminishing unique-record returns — for the targeted ~25 M
 tokens this is the right stopping point.
 
-**Two student runs.** v1 (2026-06-02): trained synthetic-only, early-stopped
-~step 7000, best syn_val 1.73 but honest **real_val ~4.0** — the model fit the
-teacher's distribution, not real TP. v2 (2026-06-05): retrained on the
-**real + translated + v1-synthetic** mix (8.44 M train tokens; same tokenizer +
-architecture), early-stopped step 18000, **real_loss 2.16** with the val↔real
-gap collapsed (see "Stage 2 v2"). The v2 checkpoint is the current deliverable;
-generations are markedly more worldly (e.g. `mi toki lon toki Kanse`).
+**Student runs — and the balance lesson.** Honest `real_loss` (held-out real
+docs, same 200-doc slice + tokenizer throughout, so the numbers are comparable):
+
+| run | model | train tokens | real share | real_loss |
+|---|---|---|---|---|
+| v1 (2026-06-02) | 6L/256d, 5.4 M | 2.2 M | 0 % (eval-only) | 4.0 |
+| v2 (2026-06-05) | 6L/256d, 5.4 M | 8.9 M | 37 % | 2.16 |
+| scaled, unbalanced | 8L/384d, 15.2 M | 24.3 M | 13 % | 2.22 |
+| **rebalanced (best)** | **8L/384d, 15.2 M** | **50.9 M** | **37 %** | **2.08** |
+
+- **v1 → v2**: adding the translated corpus to a real-anchored mix collapsed the
+  val↔real gap and took `real_loss` 4.0 → 2.16 — translation injects real-world
+  content paraphrase/continuation can't.
+- **Scaling translated to dominate *regressed* it** (2.16 → 2.22). After the full
+  English pool, `translated.jsonl` reached **1,576,213 sentences / 16 M words**,
+  but at all of it the real corpus fell to **13 %** of the mix and the model
+  drifted toward machine-*translationese* (grammatical but not idiomatic).
+- **Balance, not volume, is the lever.** Upsampling real ×6 (`--real-weight`) to
+  restore the 37 % share — same 15 M model, same translated corpus, *only* the
+  proportion changed — swung `real_loss` **2.22 → 2.08**, beating v2. The
+  ~3.3 M-token human corpus is the quality ceiling; `real_loss` is near its floor.
+
+The **rebalanced 8L/384d checkpoint is the current deliverable**
+(`models/student_runs/student-8L384d-rebal-20260607T051752Z/best.pt`).
+Generations are fluent and worldly Latin TP (e.g. `mi toki lon toki sina`,
+`jan Ton li tawa kama lon poka pi jan Mewi`), which the `sitelen/` layer renders
+to sitelen pona glyphs on output — the model itself only ever emits Latin TP.
