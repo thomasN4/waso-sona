@@ -667,3 +667,73 @@ The **rebalanced 8L/384d checkpoint is the current deliverable**
 Generations are fluent and worldly Latin TP (e.g. `mi toki lon toki sina`,
 `jan Ton li tawa kama lon poka pi jan Mewi`), which the `sitelen/` layer renders
 to sitelen pona glyphs on output — the model itself only ever emits Latin TP.
+
+### Student bench — fine-tune readiness (`bench_student.py`, 2026-06-07)
+
+`scripts/bench_student.py` characterizes the *base* student model so we can
+reason about what to fine-tune it for, rather than reading a single loss. It runs
+five sections over the deliverable plus the three prior student runs (same
+tokenizer → directly comparable), writing `data/bench/student_bench_summary.json`
++ `student_gens.jsonl` (1,240 raw generations). Sections: **(A)** exact
+strided-window perplexity, **(B)** free generation across a temperature sweep,
+**(C)** a prompted-continuation capability map by register, **(D)** decode
+throughput, **(E)** rule-based fine-tune-readiness verdicts. Validity/diversity
+reuse `bench_adapters.score_texts` + `augment_corpus._filter_sentence`; the
+perplexity uses an exact full-coverage window, **not** the random-window
+`eval_loss` (which never covers the tail).
+
+**The bench reproduces the training `real_loss` history exactly** (held-out
+tatoeba, exact NLL → the numbers validate both the bench and the run ranking):
+
+| run | arch | held-out tatoeba nll (ppl) | training `real_loss` |
+|---|---|---|---|
+| **rebal (deliverable)** | 8L/384d | **2.105 (8.2)** | 2.08 |
+| v2 (real+trans+synth) | 6L/256d | 2.171 (8.8) | 2.16 |
+| scaled (unbalanced) | 8L/384d | 2.254 (9.5) | 2.22 |
+| v1 (synthetic-only) | 6L/256d | 4.228 (68.5) | 4.0 |
+
+**Honest-eval caveat (load-bearing).** `corpus.filtered.jsonl` is ordered by
+source, and training held out only `real_all[:200]` — which is *entirely tatoeba
+single-sentences*. So only `tatoeba_heldout_200` is a generalization number;
+every other per-source perplexity is **in-sample** (those docs were trained on,
+real upsampled ×6) and is a *register-coverage* indicator, not generalization.
+The clean same-register isolation of that effect: rebal scores tatoeba **2.105
+held-out vs 1.936 in-sample** — a 0.17-nll memorization gap. The deliverable
+represents *all* real registers tightly (poki/nltk/tokwiki in-sample nll
+1.3–1.5); the synthetic-only v1, which never saw real long-form prose, blows up
+on exactly those registers (poki/tokwiki nll 6.3–6.6) — concrete evidence that
+the real+translated corpus, not the synthetic, bought the long-form coverage.
+
+**Capability map (deliverable, continuations scored at temp 0.9, by validity):**
+
+| register | sent-valid | strict-valid | reads as |
+|---|---|---|---|
+| narrative opener | 100 % | 80 % | story / prose |
+| mi/sina personal | 100 % | 75 % | chat / diary |
+| seme question | 100 % | 50 % | Q-completion |
+| topical / encyclopedic | 100 % | 40 % | factual (longer, looser) |
+| instruction-ish (`o …`) | 100 % | 25 % | *never seen — needs SFT* |
+
+Free generation is **clean and non-degenerate**: doc/sentence/strict validity
+~100 %, distinct-2 ≈ 1.0, OOV ≤ 0.4 %, and — unlike the Gemma teacher, which
+looped catastrophically at greedy — the from-scratch student **does not loop even
+at greedy** (loop-rate 0 % at every temperature). Decode throughput: **1,245
+tok/s bf16 GPU / 228 tok/s CPU** for the 15 M deliverable (the 5.4 M v2: 1,566 /
+516) — real-time for an in-app IME even on CPU.
+
+**Fine-tune readiness (deliverable):** *ready* for conversational/chat SFT,
+story/prose generation, autocomplete/IME, grammar-style correction, and
+constrained/templated generation; *needs-work* for instruction following (the
+base never saw an instruction format — that's SFT distance, not a defect);
+en→tp is *promising-as-decoder* (the base is a strong TP-side LM prior but an
+English encoder/conditioning must be added); tp→en is *not supported by the base*
+(it only ever produced TP — needs a bilingual corpus + likely vocab extension).
+Every "ready" verdict is about **TP-side fluency**; targets needing English or
+instruction formats require new data the base has never seen.
+
+**Strategic note (base selection for fine-tuning).** The deliverable wins on
+perplexity (2.10 vs 2.17) and encyclopedic coverage, but v2 (5.4 M) has a nearly
+identical capability map — it actually edges the deliverable on mi/sina (88 %)
+and encyclopedic (55 %) continuations — at **~1.3× the throughput**. For a
+latency-sensitive target (e.g. an on-device IME) v2 is a strong, cheaper base;
+for quality/perplexity-sensitive targets, use the rebalanced deliverable.
