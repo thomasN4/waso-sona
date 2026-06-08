@@ -26,6 +26,9 @@ dependencies = [
     # flag is a no-op patcher for us) but the flag makes TRL skip a vocab-
     # sized entropy metric in compute_loss that otherwise OOMs.
     "liger-kernel>=0.8",
+    # The from-scratch student tokenizer is SentencePiece BPE;
+    # train_student.py / talk_to_student.py / bench_student.py import it.
+    "sentencepiece>=0.2",
 ]
 
 [project.optional-dependencies]
