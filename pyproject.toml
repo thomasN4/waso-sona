@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "waso-sona"
 version = "0.1.0"
-description = "Bidirectional translator between Latin Toki Pona and sitelen pona UCSUR."
+description = "A small, locally-trained Toki Pona language model and a desktop pet bird that renders and speaks it (sitelen pona UCSUR)."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = { file = "LICENSE" }
@@ -26,8 +26,9 @@ dependencies = [
     # flag is a no-op patcher for us) but the flag makes TRL skip a vocab-
     # sized entropy metric in compute_loss that otherwise OOMs.
     "liger-kernel>=0.8",
-    # The from-scratch student tokenizer is SentencePiece BPE;
-    # train_student.py / talk_to_student.py / bench_student.py import it.
+    # The from-scratch student / talking-bird tokenizer is SentencePiece BPE;
+    # train_student.py, talk_to_student.py, bench_student.py, and talk_to_bird.py
+    # all import it.
     "sentencepiece>=0.2",
 ]
 
