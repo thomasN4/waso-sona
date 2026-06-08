@@ -97,6 +97,26 @@ impl AppState {
         }
     }
 
+    /// The size (in surface-local pixels) of the output the bird lives on, used
+    /// as a fallback when a `configure` reports a 0 dimension. Single-output for
+    /// now; takes the first known output.
+    fn output_size(&self) -> Option<(u32, u32)> {
+        self.output_state.outputs().find_map(|o| {
+            let info = self.output_state.info(&o)?;
+            if let Some((w, h)) = info.logical_size {
+                if w > 0 && h > 0 {
+                    return Some((w as u32, h as u32));
+                }
+            }
+            let mode = info.modes.iter().find(|m| m.current)?;
+            let scale = info.scale_factor.max(1);
+            Some((
+                (mode.dimensions.0 / scale).max(1) as u32,
+                (mode.dimensions.1 / scale).max(1) as u32,
+            ))
+        })
+    }
+
     /// Advance simulation + animation by elapsed wall-clock time, then redraw.
     fn tick(&mut self, qh: &QueueHandle<Self>) {
         let now = Instant::now();
@@ -241,8 +261,14 @@ impl LayerShellHandler for AppState {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let new_w = NonZeroU32::new(configure.new_size.0).map_or(self.width, NonZeroU32::get);
-        let new_h = NonZeroU32::new(configure.new_size.1).map_or(self.height, NonZeroU32::get);
+        // wlr-layer-shell lets the compositor send 0 for a dimension, meaning
+        // "you choose" — KWin/cosmic-comp send the full output size for an
+        // all-edges-anchored surface, but if either axis ever comes back 0 we
+        // must NOT keep the initial 0 (which leaves the surface unconfigured and
+        // the bird invisible). Fall back to the output's own size.
+        let (ow, oh) = self.output_size().unwrap_or((self.width, self.height));
+        let new_w = NonZeroU32::new(configure.new_size.0).map_or(ow, NonZeroU32::get);
+        let new_h = NonZeroU32::new(configure.new_size.1).map_or(oh, NonZeroU32::get);
 
         let size_changed = new_w != self.width || new_h != self.height;
         self.width = new_w;
