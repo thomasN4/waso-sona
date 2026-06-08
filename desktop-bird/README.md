@@ -62,7 +62,7 @@ the Toki Pona model will pipe into:
 python demo.py | cargo run --release      # run from this directory
 
 # The talking-bird model itself (the fine-tuned student) → the bird:
-python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release
+../.venv/bin/python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release
 ```
 
 `demo.py` cycles a few Latin sentences through `sitelen.latin_to_ucsur` and
@@ -77,10 +77,13 @@ the same `UCSUR⇥seconds` lines `demo.py` does, so it's a drop-in upgrade over 
 hardcoded demo. It's **one conditioned generator**: a free *chirp* by default, or
 a reactive comment when given a Toki Pona *scene* — `--loop` alternates the two.
 
+It needs the repo's Python venv (`../.venv`, which has torch + sentencepiece) —
+hence `../.venv/bin/python`, not a bare `python`:
+
 ```sh
-python ../scripts/talk_to_bird.py --n 8                       # sample chirps (Latin)
-python ../scripts/talk_to_bird.py --scene "tenpo pimeja li kama" --ucsur   # reactive
-python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release      # live
+../.venv/bin/python ../scripts/talk_to_bird.py --n 8                       # sample chirps (Latin)
+../.venv/bin/python ../scripts/talk_to_bird.py --scene "tenpo pimeja li kama" --ucsur   # reactive
+../.venv/bin/python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release      # live
 ```
 
 Eventually the desktop-bird should feed the model a `--scene` derived from its
