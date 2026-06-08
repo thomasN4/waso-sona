@@ -57,11 +57,34 @@ the Toki Pona model will pipe into:
 ```sh
 # Hardcoded test sentences (reuses the Python translator) → the bird:
 python demo.py | cargo run --release      # run from this directory
-# (later) the model itself: python -m … --ucsur | cargo run --release
+
+# The talking-bird model itself (the fine-tuned student) → the bird:
+python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release
 ```
 
 `demo.py` cycles a few Latin sentences through `sitelen.latin_to_ucsur` and
 prints the UCSUR with a per-line duration, pacing so each bubble shows fully.
+
+### The talking-bird model (`../scripts/talk_to_bird.py`)
+
+The bird's speech is a tiny from-scratch Toki Pona LM fine-tuned into a curious,
+cheerful persona (the `bird-sft` branch builds the SFT data + does the
+fine-tune; see the repo `PIPELINE.md`). `talk_to_bird.py` samples it and emits
+the same `UCSUR⇥seconds` lines `demo.py` does, so it's a drop-in upgrade over the
+hardcoded demo. It's **one conditioned generator**: a free *chirp* by default, or
+a reactive comment when given a Toki Pona *scene* — `--loop` alternates the two.
+
+```sh
+python ../scripts/talk_to_bird.py --n 8                       # sample chirps (Latin)
+python ../scripts/talk_to_bird.py --scene "tenpo pimeja li kama" --ucsur   # reactive
+python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release      # live
+```
+
+Eventually the desktop-bird should feed the model a `--scene` derived from its
+own `BirdBrain` state + the active window (a deterministic TP templater), so the
+bird comments on what's actually on screen. For now `--loop` self-drives. The
+model + tokenizer live under the repo's gitignored `models/`; train them via the
+`bird-sft` branch's `scripts/train_bird.py` if the checkpoint isn't present.
 
 To eyeball the rendering without a Wayland session, render a still PNG:
 
