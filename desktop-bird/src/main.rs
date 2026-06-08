@@ -12,6 +12,7 @@ mod brain;
 mod bubble;
 mod cosmic;
 mod font;
+mod kwin;
 mod render;
 mod sprite;
 mod tracker;
@@ -106,18 +107,26 @@ fn main() {
 
     let registry_state = RegistryState::new(&globals);
 
-    // COSMIC advertises cosmic-toplevel-info; that's our active-window source.
-    // Elsewhere (e.g. KWin) the bird just wanders until the KWin backend lands.
+    // Window tracking (for perching) is per-compositor. COSMIC advertises
+    // cosmic-toplevel-info on the Wayland registry; KWin (Plasma 6) has no client
+    // protocol for it, so we use a KWin-script → D-Bus bridge (see kwin.rs).
+    // Elsewhere the bird just wanders.
     let has_cosmic = globals
         .contents()
         .with_list(|globals| globals.iter().any(|g| g.interface == "zcosmic_toplevel_info_v1"));
-    let tracker = if has_cosmic {
-        CosmicTracker::bind(&registry_state, &qh)
+    let (tracker, kwin_tracker) = if has_cosmic {
+        (CosmicTracker::bind(&registry_state, &qh), None)
+    } else if is_kwin() {
+        match kwin::start() {
+            Some(kt) => (None, Some(kt)),
+            None => {
+                eprintln!("desktop-bird: KWin detected but script bridge failed; bird will wander");
+                (None, None)
+            }
+        }
     } else {
-        eprintln!(
-            "desktop-bird: no cosmic-toplevel-info global; window tracking disabled (bird will wander)"
-        );
-        None
+        eprintln!("desktop-bird: no window-tracking backend; bird will wander");
+        (None, None)
     };
 
     // Speech bubbles are fed from stdin: one bubble per line, UTF-8 sitelen
@@ -153,6 +162,7 @@ fn main() {
         region,
         sprite,
         tracker,
+        kwin_tracker,
         bubble_rx,
     );
 
@@ -162,6 +172,15 @@ fn main() {
             break;
         }
     }
+}
+
+/// True on a KDE Plasma session, where we drive perching via the KWin script
+/// bridge (`kwin.rs`). `XDG_CURRENT_DESKTOP` is a colon-separated list (e.g.
+/// "KDE" or "KDE:plasma"); match "KDE" case-insensitively.
+fn is_kwin() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("KDE")))
+        .unwrap_or(false)
 }
 
 /// Render the talking bird with a speech bubble into a PNG (no Wayland needed).

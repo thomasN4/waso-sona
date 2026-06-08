@@ -30,6 +30,7 @@ use std::sync::mpsc::Receiver;
 use crate::brain::BirdBrain;
 use crate::bubble::BubbleState;
 use crate::cosmic::CosmicTracker;
+use crate::kwin::KwinTracker;
 use crate::render::{self, Rect};
 use crate::sprite::{AnimId, Sprite};
 use crate::tracker::WindowTracker;
@@ -57,6 +58,10 @@ pub struct AppState {
     /// the KWin backend lands in a later slice). Updated by the `Dispatch` impls
     /// in `cosmic.rs`, hence `pub(crate)`.
     pub(crate) tracker: Option<CosmicTracker>,
+    /// KWin (Plasma 6) active-window source. `Some` when the KWin script bridge
+    /// is up; mutually exclusive with `tracker` in practice. Owns the D-Bus
+    /// connection + KWin-script lifecycle.
+    kwin_tracker: Option<KwinTracker>,
     /// Currently displayed speech bubble, if any.
     bubble: Option<BubbleState>,
     /// Incoming `(text, duration_secs)` messages from the model thread.
@@ -74,6 +79,7 @@ impl AppState {
         input_region: Region,
         sprite: Sprite,
         tracker: Option<CosmicTracker>,
+        kwin_tracker: Option<KwinTracker>,
         bubble_rx: Receiver<(String, f32)>,
     ) -> Self {
         AppState {
@@ -92,6 +98,7 @@ impl AppState {
             last_frame: Instant::now(),
             prev_rect: None,
             tracker,
+            kwin_tracker,
             bubble: None,
             bubble_rx,
         }
@@ -123,7 +130,16 @@ impl AppState {
         let dt = (now - self.last_frame).as_secs_f32().min(0.25); // clamp after stalls
         self.last_frame = now;
 
-        let active = self.tracker.as_ref().and_then(|t| t.active_window());
+        // Drain any KWin geometry updates first (&mut borrow), then read the
+        // active window from whichever backend is live.
+        if let Some(kt) = self.kwin_tracker.as_mut() {
+            kt.drain();
+        }
+        let active = self
+            .tracker
+            .as_ref()
+            .and_then(|t| t.active_window())
+            .or_else(|| self.kwin_tracker.as_ref().and_then(|t| t.active_window()));
         self.brain.update(dt, active.as_ref());
 
         // Accept the most-recent queued bubble message (drain the channel,

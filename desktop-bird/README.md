@@ -12,9 +12,12 @@ Wayland-protocol reasoning behind it.
   inside it. Portable to any layer-shell compositor.
 - **Slice 2 — COSMIC window tracker (done).** On COSMIC, the bird reads the
   active window's geometry from `cosmic-toplevel-info` and perches on its top
-  edge; off COSMIC it falls back to wandering. KWin tracking is next.
+  edge; off COSMIC it falls back to wandering.
 - **Slice 3 — BirdBrain state machine (done).** Wander / Approach / Perch / Flit
   behaviour with per-state animations; unit-tested headless. See *Behaviour*.
+- **Slice 4 — KWin window tracker (done).** On Plasma 6 the bird perches too,
+  via a self-loaded KWin script that pushes the active window's geometry over
+  D-Bus to the app. See *Window tracking → KWin*.
 
 ## Licensing
 
@@ -135,19 +138,37 @@ cargo run -- --export-sprites assets/sprites/placeholder
 | `src/cosmic.rs` | `CosmicTracker` — generated bindings + `Dispatch` for cosmic-toplevel-info. |
 | `protocols/` | Vendored HPND protocol XML, compiled by `wayland-scanner`. |
 
-## Window tracking (COSMIC)
+## Window tracking (perching)
+
+The active-window source is per-compositor (`src/tracker.rs`'s `WindowTracker`);
+the picker in `main.rs` selects a backend, and off both the bird just wanders.
+
+### COSMIC
 
 `cosmic-toplevel-info` is dispatched on the **same** Wayland event queue as the
 renderer (its globals live on the same registry), so no extra event loop is
-needed yet. At startup we check the registry for `zcosmic_toplevel_info_v1`; if
+needed. At startup we check the registry for `zcosmic_toplevel_info_v1`; if
 present we bind the standard `ext-foreign-toplevel-list` plus our cosmic-info
 bindings, request a cosmic handle per toplevel, and read its `state` + per-output
 `geometry`. The active (`Activated`) toplevel drives a perch target on its top
-edge. The active window is logged to stderr on change. Off COSMIC, tracking is
-disabled and the bird wanders.
+edge. The active window is logged to stderr on change.
 
-> The KWin backend (a `.kwinscript` pushing geometry over **D-Bus**) *will* need
-> a second event source — that's when the loop moves to `calloop`.
+### KWin (Plasma 6)
+
+KWin exposes no client protocol for window geometry, so `src/kwin.rs` registers a
+session-bus service `org.waso.DesktopBird` and **self-loads** a KWin script
+(`kwin/perch.js`, embedded and written to `$XDG_RUNTIME_DIR`) via
+`org.kde.kwin.Scripting`. Running inside the compositor, the script watches
+`workspace.activeWindow` / `windowActivated` and the active window's
+`frameGeometryChanged` / move-resize / minimize signals, and pushes geometry out
+with `callDBus`. Those calls land on the service, which forwards each update over
+an mpsc channel the renderer drains every frame (`KwinTracker::drain`) — the same
+thread-to-channel pattern as the stdin/bubble reader, so **no `calloop`** is
+needed (the bird re-arms a frame callback every frame, waking the loop ~60fps).
+Selected when `XDG_CURRENT_DESKTOP` contains `KDE`; the script is unloaded on a
+clean exit, and an unload-first on the next launch self-heals a hard kill.
+Single-output only for now (KWin's geometry is global-logical = output-local at
+the 0,0 output).
 
 ## Behaviour (`BirdBrain`)
 
@@ -180,15 +201,8 @@ makes the whole surface click-through.
 
 ## Roadmap (next slices)
 
-- **KWin `WindowTracker` backend**: ship a `.kwinscript` that pushes
-  `frameGeometry` over D-Bus (the COSMIC backend already exists). Needs `calloop`.
 - **Vector art** for the idle / fly / perch clips (drops into the per-state
   `BIRD_SPRITE_DIR` layout); optional takeoff/land transition states.
-- Multi-output (per-output surfaces + coordinate translation).
+- Multi-output (per-output surfaces + coordinate translation) — also the one
+  limitation of the KWin tracker (global-logical geometry assumes the 0,0 output).
 - Optional draggable/pettable bird (sprite-shaped, non-empty input region).
-
-> **Note for the tracker slice:** adding a second event source (a second Wayland
-> queue for the COSMIC protocol, or a D-Bus connection for the KWin script) will
-> want a `calloop` event loop (`calloop` + `calloop-wayland-source`, both already
-> pulled in transitively) instead of the current `blocking_dispatch` loop — so we
-> don't rebuild the loop twice.

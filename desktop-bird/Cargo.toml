@@ -24,3 +24,9 @@ fontdue = "0.9"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-scanner = "0.31"
 wayland-backend = "0.3"
+# KWin (Plasma 6) window tracking: a KWin script (kwin/perch.js) runs inside the
+# compositor and pushes the active window's geometry over the session bus to a
+# service we register here. zbus is pure-Rust and MIT — consistent with this
+# crate's MIT-only policy (vs. libdbus-linked dbus-rs). No tokio feature: zbus
+# 5 defaults to its own internal async executor thread.
+zbus = "5"
