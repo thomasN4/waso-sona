@@ -26,6 +26,10 @@ dependencies = [
     # flag is a no-op patcher for us) but the flag makes TRL skip a vocab-
     # sized entropy metric in compute_loss that otherwise OOMs.
     "liger-kernel>=0.8",
+    # Claude Haiku 4.5 is the primary generator for the desktop-bird persona SFT
+    # data (scripts/gen_bird_haiku.py) — it writes valid de-novo Toki Pona where
+    # local Gemma drifts off-persona. Needs ANTHROPIC_API_KEY in the environment.
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
