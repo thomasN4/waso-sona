@@ -102,18 +102,37 @@ def ucsur_to_latin(text: str) -> str:
 
 _LATIN_TOKEN_RE = re.compile(r"[A-Za-z]+|[.!?:,]")
 
+# Punctuation policy, following common sitelen pona usage (sona pona):
+# punctuation mainly marks sentence boundaries, and most writers mark one with
+# a plain space (or line break), not a glyph. So ./!/? become a single space;
+# the period/seme/exclamation glyphs are avoided. Commas are not written at
+# all. The colon is the one mark that keeps a dedicated glyph (middle colon),
+# which sitelen pona does use before quotes and lists.
+_SENTENCE_ENDERS = {".", "!", "?"}
+_SENTENCE_BOUNDARY = " "
+
 
 def latin_to_ucsur(text: str) -> str:
-    """Translate Latin-script Toki Pona into sitelen pona UCSUR text."""
+    """Translate Latin-script Toki Pona into sitelen pona UCSUR text.
+
+    Word-glyphs are written with no separating spaces; the only space is a
+    sentence boundary. Because that boundary is a bare space and the decoder
+    treats spaces as non-significant (glyphs are self-delimiting), the
+    Latin -> UCSUR -> Latin round trip drops sentence-final punctuation by
+    design -- which is how sitelen pona itself behaves.
+    """
     pieces: list[str] = []
     for m in _LATIN_TOKEN_RE.finditer(text):
         piece = m.group(0)
-        if piece == ",":
-            continue
-        if piece in ASCII_PUNCT_MAP:
+        if piece in _SENTENCE_ENDERS:
+            pieces.append(_SENTENCE_BOUNDARY)
+        elif piece == ",":
+            continue  # commas are not written in sitelen pona
+        elif piece in ASCII_PUNCT_MAP:
+            # Only ":" reaches here; ./!/? are intercepted as boundaries above.
             pieces.append(chr(ASCII_PUNCT_MAP[piece]))
-            continue
-        pieces.extend(_translate_word(piece))
+        else:
+            pieces.extend(_translate_word(piece))
     return _join_ucsur(pieces)
 
 
@@ -133,26 +152,25 @@ def _translate_word(word: str) -> list[str]:
 
 
 def _join_ucsur(pieces: list[str]) -> str:
-    """Render glyph pieces with spaces between words; none inside cartouches."""
+    """Concatenate glyph pieces into a sitelen pona string.
+
+    Word-glyphs and cartouches run together with no separators -- UCSUR glyphs
+    are self-delimiting, so the spacing the Latin script needs is unnecessary.
+    The only space is a sentence boundary (the _SENTENCE_BOUNDARY sentinel).
+    Runs of boundaries, and any leading or trailing boundary, are collapsed so
+    the result holds at most a single space between sentences and none at the
+    edges.
+    """
     out: list[str] = []
-    in_cartouche = False
+    at_boundary = True  # treat start-of-text as a boundary to swallow leading spaces
     for g in pieces:
-        cp = ord(g) if len(g) == 1 else -1
-        is_punct = cp in (MIDDLE_DOT, MIDDLE_COLON)
-        if cp == CARTOUCHE_START or cp == CARTOUCHE_EXT_START:
-            if out:
-                out.append(" ")
-            out.append(g)
-            in_cartouche = True
-        elif cp == CARTOUCHE_END or cp == CARTOUCHE_EXT_END:
-            out.append(g)
-            in_cartouche = False
-        elif in_cartouche:
-            out.append(g)
-        elif is_punct:
-            out.append(g)
+        if g == _SENTENCE_BOUNDARY:
+            if not at_boundary:
+                out.append(_SENTENCE_BOUNDARY)
+                at_boundary = True
         else:
-            if out:
-                out.append(" ")
             out.append(g)
+            at_boundary = False
+    if out and out[-1] == _SENTENCE_BOUNDARY:
+        out.pop()  # trailing boundary
     return "".join(out)

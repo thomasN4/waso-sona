@@ -32,21 +32,31 @@ def test_syllabify(word: str, expected: list[str]) -> None:
 # ---- Latin -> UCSUR ----
 
 def test_known_words_map_to_glyphs() -> None:
-    assert latin_to_ucsur("mi olin e sina") == " ".join(
+    # Word-glyphs run together with no separating spaces (sitelen pona convention).
+    assert latin_to_ucsur("mi olin e sina") == "".join(
         [_g("mi"), _g("olin"), _g("e"), _g("sina")]
     )
 
 
-def test_period_maps_to_middle_dot() -> None:
-    assert latin_to_ucsur("mi pona.").endswith(chr(MIDDLE_DOT))
+def test_words_within_a_sentence_are_not_spaced() -> None:
+    assert " " not in latin_to_ucsur("mi olin e sina")
 
 
-def test_question_mark_maps_to_middle_dot() -> None:
-    assert latin_to_ucsur("toki?").endswith(chr(MIDDLE_DOT))
+def test_period_becomes_a_sentence_boundary_space() -> None:
+    # ./!/? are not written as glyphs; a single space marks the sentence break.
+    out = latin_to_ucsur("mi pona. mi wile.")
+    assert out == _g("mi") + _g("pona") + " " + _g("mi") + _g("wile")
+    assert chr(MIDDLE_DOT) not in out
 
 
-def test_exclamation_maps_to_middle_dot() -> None:
-    assert latin_to_ucsur("pona!").endswith(chr(MIDDLE_DOT))
+def test_question_and_exclamation_become_boundaries_not_glyphs() -> None:
+    out = latin_to_ucsur("toki? pona!")
+    assert out == _g("toki") + " " + _g("pona")
+    assert chr(MIDDLE_DOT) not in out
+
+
+def test_trailing_sentence_punctuation_leaves_no_trailing_space() -> None:
+    assert latin_to_ucsur("mi pona.") == _g("mi") + _g("pona")
 
 
 def test_colon_maps_to_middle_colon() -> None:
@@ -54,7 +64,8 @@ def test_colon_maps_to_middle_colon() -> None:
 
 
 def test_comma_is_dropped() -> None:
-    assert "," not in latin_to_ucsur("mi, sina")
+    # A comma is not written and does not introduce a space either.
+    assert latin_to_ucsur("mi, sina") == _g("mi") + _g("sina")
 
 
 def test_sentence_initial_capital_known_word_stays_a_word() -> None:
@@ -69,11 +80,11 @@ def test_capitalized_name_becomes_cartouche_of_letter_glyphs() -> None:
     # per letter, using the encoder's representative word for each letter.
     out = latin_to_ucsur("jan Mali li pona")
     expected = (
-        _g("jan") + " "
+        _g("jan")
         + chr(CARTOUCHE_START)
         + _g("mama") + _g("ala") + _g("luka") + _g("ilo")
         + chr(CARTOUCHE_END)
-        + " " + _g("li") + " " + _g("pona")
+        + _g("li") + _g("pona")
     )
     assert out == expected
 
@@ -166,13 +177,16 @@ def test_word_glyphs_without_separating_spaces_still_parse() -> None:
 
 # ---- round trips ----
 
-@pytest.mark.parametrize("latin", [
-    "mi pona.",
-    "toki:",
-    "mi olin e sina.",
-    "jan Mali li pona.",
-    "soweli suli li lon ma.",
-    "Sonja li toki.",
+# Sentence-final ./!/? are intentionally lost on the round trip: they become a
+# bare space, which the decoder treats as non-significant. The colon survives
+# because it keeps a dedicated glyph; words and names are otherwise unchanged.
+@pytest.mark.parametrize("latin,expected", [
+    ("mi pona.", "mi pona"),
+    ("toki:", "toki:"),
+    ("mi olin e sina.", "mi olin e sina"),
+    ("jan Mali li pona.", "jan Mali li pona"),
+    ("soweli suli li lon ma.", "soweli suli li lon ma"),
+    ("Sonja li toki.", "Sonja li toki"),
 ])
-def test_round_trip_latin_to_ucsur_to_latin(latin: str) -> None:
-    assert ucsur_to_latin(latin_to_ucsur(latin)) == latin
+def test_round_trip_latin_to_ucsur_to_latin(latin: str, expected: str) -> None:
+    assert ucsur_to_latin(latin_to_ucsur(latin)) == expected
