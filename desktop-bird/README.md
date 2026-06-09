@@ -99,16 +99,27 @@ cargo run -- --preview "" bubble.png            # built-in sample sentence
 cargo run -- --preview "$(python demo.py | head -1 | cut -f1)" bubble.png
 ```
 
+### Bird styles
+
+The bird is procedurally generated vector art (anti-aliased shapes drawn in
+code, distinct idle / fly / perch / talk poses) and ships in five colour
+schemes. Pick one with `BIRD_STYLE`:
+
+```sh
+BIRD_STYLE=walo cargo run        # sona (default, slate blue) / walo (chickadee)
+                                 # laso (bluebird) / jelo (goldfinch) / loje (robin)
+cargo run -- --style-sheet birds.png   # render all styles to one PNG to compare
+```
+
 ### Custom sprite (optional)
 
-By default a procedurally generated placeholder bird is used (distinct idle / fly
-/ perch / talk poses). To use real art, set `BIRD_SPRITE_DIR`; the bird should
+To use real art instead, set `BIRD_SPRITE_DIR`; the bird should
 face **right** and all frames must share one canvas size. Two layouts are
 accepted:
 
 ```sh
 # Per-state: one subdir per animation, each a set of PNGs sorted by filename.
-# Missing subdirs fall back to another clip. (This is where vector poses go.)
+# Missing subdirs fall back to another clip.
 # `talk/` is played while a speech bubble is showing; it falls back to idle.
 BIRD_SPRITE_DIR=/path/to/art   # art/{idle,fly,perch,talk}/*.png
 
@@ -116,11 +127,11 @@ BIRD_SPRITE_DIR=/path/to/art   # art/{idle,fly,perch,talk}/*.png
 BIRD_SPRITE_DIR=/path/to/frames
 ```
 
-The code-generated placeholder is also checked in as PNGs at
+The code-generated bird (default style) is also checked in as PNGs at
 [`assets/sprites/placeholder/`](assets/sprites/placeholder) (per-state layout), so
 you can edit/replace them directly and run with
 `BIRD_SPRITE_DIR=assets/sprites/placeholder`. Regenerate them from the procedural
-source any time with:
+source any time (respects `BIRD_STYLE`) with:
 
 ```sh
 cargo run -- --export-sprites assets/sprites/placeholder
