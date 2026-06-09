@@ -215,11 +215,11 @@ why the generation comparison, not the loss curve, is the arbiter here.
 Two pure text-to-text functions:
 
 - `latin_to_ucsur(text)` — words → glyphs; `.!?` → middle dot; `:` →
-  middle colon; commas dropped; capitalized unknowns → cartouche of
-  per-syllable glyphs (PU-word preferred, then shortest, then alphabetic)
-  with a CV+n fallback for CVN syllables that have no representative word.
+  middle colon; commas dropped; capitalized unknowns → cartouche spelled
+  one glyph per letter (first-letter acrostic, per pu), using a fixed
+  representative word for each of the 14 Toki Pona letters.
 - `ucsur_to_latin(text)` — inverse. Cartouche reads each glyph by its
-  word's first syllable, concatenated and capitalized. Stacking and
+  word's first letter, concatenated and capitalized. Stacking and
   scaling joiners → spaces. Long-glyph and reverse-long-glyph markers
   silently stripped. Extended cartouches treated as normal cartouches.
 

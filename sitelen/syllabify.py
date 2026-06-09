@@ -1,5 +1,13 @@
 """Toki Pona syllabifier.
 
+NOTE (unused by the translator): cartouches were originally encoded one glyph
+per *syllable*, which is what this module supported. The translator now follows
+the pu convention of spelling names one glyph per *letter* (first-letter
+acrostic), so `sitelen/translate.py` no longer calls `syllabify`. It is kept as
+a standalone, still-tested utility — re-exported from `sitelen/__init__.py` — in
+case a future feature needs Toki Pona syllable boundaries again. If nothing ends
+up using it, this whole module can be deleted without touching the translator.
+
 Phonotactics: (C)V(N) where
   C ∈ {p, t, k, s, m, n, l, j, w}
   V ∈ {a, e, i, o, u}

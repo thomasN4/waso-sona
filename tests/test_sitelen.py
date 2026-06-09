@@ -64,26 +64,28 @@ def test_sentence_initial_capital_known_word_stays_a_word() -> None:
     assert out.startswith(_g("mi"))
 
 
-def test_capitalized_name_becomes_cartouche_of_syllable_glyphs() -> None:
-    # "Mali" syllabifies to ["ma", "li"]; both syllables are TP words, so
-    # each maps to its own glyph inside a cartouche.
+def test_capitalized_name_becomes_cartouche_of_letter_glyphs() -> None:
+    # First-letter acrostic (pu convention): "Mali" -> m, a, l, i, one glyph
+    # per letter, using the encoder's representative word for each letter.
     out = latin_to_ucsur("jan Mali li pona")
     expected = (
         _g("jan") + " "
-        + chr(CARTOUCHE_START) + _g("ma") + _g("li") + chr(CARTOUCHE_END)
+        + chr(CARTOUCHE_START)
+        + _g("mama") + _g("ala") + _g("luka") + _g("ilo")
+        + chr(CARTOUCHE_END)
         + " " + _g("li") + " " + _g("pona")
     )
     assert out == expected
 
 
-def test_cvn_syllable_with_no_word_falls_back_to_cv_plus_n() -> None:
-    # "Sonja" syllabifies to ["son", "ja"]; "son" has no representative word,
-    # so the encoder falls back to "so" + "n" (both have glyphs).
+def test_name_encodes_standalone_n_as_its_own_letter_glyph() -> None:
+    # No syllabification: a coda 'n' is just the letter 'n'. "Sonja" -> s, o,
+    # n, j, a, each spelled with its representative glyph.
     out = latin_to_ucsur("Sonja")
     assert out.startswith(chr(CARTOUCHE_START))
     assert out.endswith(chr(CARTOUCHE_END))
     inner = out[1:-1]
-    assert inner == _g("sona") + _g("n") + _g("jaki")
+    assert inner == _g("suno") + _g("open") + _g("nasin") + _g("jan") + _g("ala")
 
 
 def test_unknown_lowercase_word_is_dropped() -> None:
@@ -109,19 +111,28 @@ def test_middle_colon_to_colon() -> None:
 
 
 def test_cartouche_to_capitalized_name() -> None:
-    s = chr(CARTOUCHE_START) + _g("ma") + _g("li") + chr(CARTOUCHE_END)
+    s = (
+        chr(CARTOUCHE_START)
+        + _g("mama") + _g("ala") + _g("luka") + _g("ilo")
+        + chr(CARTOUCHE_END)
+    )
     assert ucsur_to_latin(s) == "Mali"
 
 
 def test_extended_cartouche_behaves_like_normal_cartouche() -> None:
-    s = chr(CARTOUCHE_EXT_START) + _g("ma") + _g("li") + chr(CARTOUCHE_EXT_END)
+    s = (
+        chr(CARTOUCHE_EXT_START)
+        + _g("mama") + _g("ala") + _g("luka") + _g("ilo")
+        + chr(CARTOUCHE_EXT_END)
+    )
     assert ucsur_to_latin(s) == "Mali"
 
 
-def test_cartouche_uses_first_syllable_of_multisyllable_glyph() -> None:
-    # The "toki" glyph inside a cartouche contributes "to", not "toki".
-    s = chr(CARTOUCHE_START) + _g("toki") + _g("ma") + chr(CARTOUCHE_END)
-    assert ucsur_to_latin(s) == "Toma"
+def test_cartouche_reads_first_letter_of_each_glyph() -> None:
+    # Each glyph contributes only its word's first letter: the "toki" glyph
+    # gives "t" (not "toki") and the "ala" glyph gives "a".
+    s = chr(CARTOUCHE_START) + _g("toki") + _g("ala") + chr(CARTOUCHE_END)
+    assert ucsur_to_latin(s) == "Ta"
 
 
 def test_stacking_joiner_yields_space_separated_words() -> None:

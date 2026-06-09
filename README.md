@@ -50,7 +50,7 @@ Wayland integration details.
 
 | Path | What's there |
 |------|--------------|
-| `sitelen/` | Bidirectional Latin Toki Pona ↔ sitelen pona UCSUR translator (syllable-aware). |
+| `sitelen/` | Bidirectional Latin Toki Pona ↔ sitelen pona UCSUR translator (first-letter cartouches, per pu). |
 | `scripts/` | The model pipeline — fetch/filter corpora, train the teacher, augment, train the student, and `talk_to_bird.py` / `bird_persona.py` for the bird's voice. |
 | `desktop-bird/` | The Rust/Wayland desktop pet app (renderer, behaviour, speech bubbles, window trackers). |
 | `data/` | Raw and processed training corpora. |

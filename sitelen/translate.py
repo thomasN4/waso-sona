@@ -14,11 +14,10 @@ from .glyphs import (
     CARTOUCHE_END, CARTOUCHE_EXT_END, CARTOUCHE_EXT_START, CARTOUCHE_START,
     CODEPOINT_TO_WORD,
     END_REVERSE_LONG_GLYPH, LONG_GLYPH_EXTENSION,
-    KU_SULI_WORDS, MIDDLE_COLON, MIDDLE_DOT,
-    PU_WORDS, SCALING_JOINER, START_REVERSE_LONG_GLYPH, STACKING_JOINER,
+    MIDDLE_COLON, MIDDLE_DOT,
+    SCALING_JOINER, START_REVERSE_LONG_GLYPH, STACKING_JOINER,
     WORD_TO_CODEPOINT,
 )
-from .syllabify import syllabify
 
 _CARTOUCHE_OPENERS = {CARTOUCHE_START, CARTOUCHE_EXT_START}
 _CARTOUCHE_CLOSERS = {CARTOUCHE_END, CARTOUCHE_EXT_END}
@@ -27,47 +26,23 @@ _STRIPPED = {
     LONG_GLYPH_EXTENSION, START_REVERSE_LONG_GLYPH, END_REVERSE_LONG_GLYPH,
 }
 
+# Inside a cartouche, sitelen pona spells a name acrostically: each glyph stands
+# for the FIRST LETTER of the Toki Pona word it normally represents. This is the
+# convention used in pu (one glyph per letter), not a syllabic one. _LETTER_TO_WORD
+# picks one representative word per Toki Pona letter for *encoding*; *decoding*
+# reads any glyph back as its word's first letter, so the round-trip holds for
+# every letter no matter which representatives are chosen here. The set below
+# deliberately avoids grammatical particles (a, e, o, pi, li, la) as glyphs.
+_LETTER_TO_WORD = {
+    "a": "ala", "e": "esun", "i": "ilo", "o": "open", "u": "uta",
+    "p": "pona", "t": "toki", "k": "kala", "s": "suno", "m": "mama",
+    "n": "nasin", "l": "luka", "j": "jan", "w": "waso",
+}
 
-def _build_syllable_to_word() -> dict[str, str]:
-    """Map each TP-phonotactic syllable to a representative TP word.
-
-    Among words whose first syllable equals the target, prefer pu over ku
-    (pu words dominate actual usage and produce more recognizable
-    cartouches), then shorter words, then alphabetic order. The choice is
-    deterministic so encode/decode round-trips cleanly: encoding emits
-    glyph(W); decoding reads glyph(W) back as `syllabify(W)[0]`.
-    """
-    pu = set(PU_WORDS)
-    by_syllable: dict[str, list[str]] = {}
-    for word in PU_WORDS + KU_SULI_WORDS:
-        sylls = syllabify(word)
-        if sylls:
-            by_syllable.setdefault(sylls[0], []).append(word)
-    return {
-        syl: sorted(words, key=lambda w: (0 if w in pu else 1, len(w), w))[0]
-        for syl, words in by_syllable.items()
-    }
-
-
-_SYLLABLE_TO_WORD = _build_syllable_to_word()
-
-
-def _glyphs_for_syllable(syl: str) -> list[str]:
-    """Return the UCSUR glyph(s) that represent a TP syllable inside a cartouche.
-
-    Most syllables map to a single glyph (the representative word's). CVN
-    syllables that have no representative word (e.g. "son", "jon", "lan") fall
-    back to CV + n: emit the CV-word glyph followed by the "n" glyph.
-    """
-    word = _SYLLABLE_TO_WORD.get(syl)
-    if word is not None:
-        return [chr(WORD_TO_CODEPOINT[word])]
-    if len(syl) > 1 and syl.endswith("n"):
-        cv = _SYLLABLE_TO_WORD.get(syl[:-1])
-        n = _SYLLABLE_TO_WORD.get("n")
-        if cv and n:
-            return [chr(WORD_TO_CODEPOINT[cv]), chr(WORD_TO_CODEPOINT[n])]
-    return []
+_LETTER_TO_GLYPH = {
+    letter: chr(WORD_TO_CODEPOINT[word])
+    for letter, word in _LETTER_TO_WORD.items()
+}
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +81,7 @@ def ucsur_to_latin(text: str) -> str:
         elif cp in CODEPOINT_TO_WORD:
             word = CODEPOINT_TO_WORD[cp]
             if cartouche is not None:
-                sylls = syllabify(word)
-                if sylls:
-                    cartouche.append(sylls[0])
+                cartouche.append(word[0])  # acrostic: the glyph's first letter
             else:
                 tokens.append(word)
         # Unrecognized chars are dropped; UCSUR input is assumed clean.
@@ -151,8 +124,10 @@ def _translate_word(word: str) -> list[str]:
         cp = WORD_TO_CODEPOINT.get(lower)
         return [chr(cp)] if cp is not None else []
     out = [chr(CARTOUCHE_START)]
-    for syl in syllabify(lower):
-        out.extend(_glyphs_for_syllable(syl))
+    for letter in lower:
+        glyph = _LETTER_TO_GLYPH.get(letter)
+        if glyph is not None:
+            out.append(glyph)
     out.append(chr(CARTOUCHE_END))
     return out
 
