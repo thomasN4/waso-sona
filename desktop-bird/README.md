@@ -102,12 +102,16 @@ cargo run -- --preview "$(python demo.py | head -1 | cut -f1)" bubble.png
 ### Bird styles
 
 The bird is procedurally generated vector art (anti-aliased shapes drawn in
-code, distinct idle / fly / perch / talk poses) and ships in five colour
-schemes. Pick one with `BIRD_STYLE`:
+code, distinct idle / fly / perch / talk poses) and ships in ten styles: five
+palettes of the cartoon bird plus five distinct designs. Pick one with
+`BIRD_STYLE`:
 
 ```sh
-BIRD_STYLE=walo cargo run        # sona (default, slate blue) / walo (chickadee)
-                                 # laso (bluebird) / jelo (goldfinch) / loje (robin)
+BIRD_STYLE=suwi cargo run
+# cartoon palettes: sona (default, slate blue) / walo (chickadee)
+#                   laso (bluebird) / jelo (goldfinch) / loje (robin)
+# distinct looks:   suwi (round chick) / musi (retro pixel sprite)
+#                   lipu (origami) / sitelen (ink doodle) / sewi (swallow)
 cargo run -- --style-sheet birds.png   # render all styles to one PNG to compare
 ```
 
@@ -144,7 +148,8 @@ cargo run -- --export-sprites assets/sprites/placeholder
 | `src/main.rs` | Wayland bring-up: bind globals, create the layer surface, set anchors / empty input region, run the dispatch loop. |
 | `src/app.rs` | `AppState` + SCTK delegate impls; per-frame tick and damage-tracked draw; plays `Talk` while a bubble is up. |
 | `src/render.rs` | `Rect` math, the RGBA→premultiplied-BGRA sprite blit, and the rounded/shadowed speech-bubble draw. |
-| `src/sprite.rs` | `Sprite`/`Frame`/`Clip`, per-state `AnimId` clips (idle/fly/perch/talk), placeholder art, PNG loader. |
+| `src/sprite.rs` | `Sprite`/`Frame`/`Clip`, per-state `AnimId` clips (idle/fly/perch/talk), PNG loader. |
+| `src/art.rs` | Procedural bird art: anti-aliased shape rasterizer, the `BIRD_STYLE` presets and their draw routines, style-sheet export. |
 | `src/bubble.rs` | `BubbleState` + the mpsc channel the stdin reader feeds. |
 | `src/font.rs` | sitelen pona text rasterizer over the bundled nasin-nanpa OTF (UCSUR code points). |
 | `src/brain.rs` | `BirdBrain` — the behaviour state machine (+ headless unit tests). |

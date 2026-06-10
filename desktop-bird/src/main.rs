@@ -8,6 +8,7 @@
 //! (Plasma 6) and cosmic-comp (COSMIC).
 
 mod app;
+mod art;
 mod brain;
 mod bubble;
 mod cosmic;
@@ -40,7 +41,7 @@ fn main() {
     // picking a BIRD_STYLE.
     if args.first().map(String::as_str) == Some("--style-sheet") {
         let out = args.get(1).map_or("style-sheet.png", String::as_str);
-        match sprite::write_style_sheet(std::path::Path::new(out)) {
+        match art::write_style_sheet(std::path::Path::new(out)) {
             Ok(()) => println!("desktop-bird: wrote style sheet to {out}"),
             Err(err) => {
                 eprintln!("desktop-bird: style sheet failed: {err}");
