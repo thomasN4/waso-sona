@@ -8,6 +8,7 @@
 //! (Plasma 6) and cosmic-comp (COSMIC).
 
 mod app;
+mod art;
 mod brain;
 mod bubble;
 mod cosmic;
@@ -35,9 +36,25 @@ use wayland_client::{globals::registry_queue_init, Connection};
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // `--export-sprites [dir]` dumps the procedural placeholder frames to PNGs in
-    // the per-state BIRD_SPRITE_DIR layout, then exits (no Wayland needed). Edit
-    // those PNGs and run with BIRD_SPRITE_DIR pointing at them to swap the art.
+    // `--style-sheet [out.png]` renders every built-in bird style across key
+    // poses into one contact-sheet PNG, then exits (no Wayland needed) — for
+    // picking a BIRD_STYLE.
+    if args.first().map(String::as_str) == Some("--style-sheet") {
+        let out = args.get(1).map_or("style-sheet.png", String::as_str);
+        match art::write_style_sheet(std::path::Path::new(out)) {
+            Ok(()) => println!("desktop-bird: wrote style sheet to {out}"),
+            Err(err) => {
+                eprintln!("desktop-bird: style sheet failed: {err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // `--export-sprites [dir]` dumps the procedural bird's frames (in the style
+    // selected by BIRD_STYLE) to PNGs in the per-state BIRD_SPRITE_DIR layout,
+    // then exits (no Wayland needed). Edit those PNGs and run with
+    // BIRD_SPRITE_DIR pointing at them to swap the art.
     if args.first().map(String::as_str) == Some("--export-sprites") {
         let dir = args.get(1).map_or("assets/sprites/placeholder", String::as_str);
         match Sprite::placeholder().write_png_frames(std::path::Path::new(dir)) {

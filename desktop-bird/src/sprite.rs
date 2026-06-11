@@ -1,14 +1,17 @@
-//! Bird sprite: per-state animation clips plus procedural placeholders so the
-//! renderer is demonstrable without art assets yet.
+//! Bird sprite: per-state animation clips plus a procedural bird drawn as
+//! anti-aliased vector shapes in code (no art assets needed).
 //!
 //! The `BirdBrain` (`brain.rs`) picks an [`AnimId`] each frame; the `Sprite`
-//! plays the matching clip. Real art drops in via `BIRD_SPRITE_DIR`:
+//! plays the matching clip. The procedural bird comes in several colour
+//! schemes — pick one with `BIRD_STYLE` (see [`crate::art::STYLES`]). External art can
+//! still replace it via `BIRD_SPRITE_DIR`:
 //!   - per-state layout: `idle/`, `fly/`, `perch/`, `talk/` subdirs, each a set
-//!     of PNGs sorted by filename (this is where the upcoming vector poses go);
+//!     of PNGs sorted by filename;
 //!   - or a flat directory of PNGs, used as a single clip for every state.
 //!
 //! All frames must share one canvas size.
 
+use crate::art::{style_from_env, BirdStyle, Pose};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -172,15 +175,42 @@ impl Sprite {
         Ok(())
     }
 
-    /// A tiny hand-drawn placeholder bird with distinct idle / fly / perch /
-    /// talk clips.
+    /// The procedural bird with distinct idle / fly / perch / talk clips, in
+    /// the style selected by `BIRD_STYLE` (default: the first of [`crate::art::STYLES`]).
     pub fn placeholder() -> Sprite {
-        // wing centre-y per pose; bigger swing = flapping.
-        let fly = Clip { frames: vec![bird_frame(8.0, false), bird_frame(14.0, false)], fps: 8.0 };
-        let idle = Clip { frames: vec![bird_frame(11.5, false), bird_frame(12.5, false)], fps: 3.0 };
-        let perch = Clip { frames: vec![bird_frame(12.5, false)], fps: 2.0 };
-        // Talk: body still (idle wing height), beak opening and closing.
-        let talk = Clip { frames: vec![bird_frame(12.5, false), bird_frame(12.5, true)], fps: 6.0 };
+        Sprite::procedural(style_from_env())
+    }
+
+    /// Build the procedural bird in a given style.
+    pub fn procedural(st: &BirdStyle) -> Sprite {
+        // Fly: a ping-pong flap (up / mid / down / mid) so the wing sweeps
+        // smoothly instead of toggling between extremes.
+        let fly = Clip {
+            frames: vec![
+                st.frame(&Pose { wing: 0.55, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.05, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.65, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.05, ..Pose::FLYING }),
+            ],
+            fps: 12.0,
+        };
+        // Idle: standing, the body gently settling between two heights.
+        let idle = Clip {
+            frames: vec![
+                st.frame(&Pose::STANDING),
+                st.frame(&Pose { bob: 1.0, ..Pose::STANDING }),
+            ],
+            fps: 3.0,
+        };
+        let perch = Clip { frames: vec![st.frame(&Pose { bob: 0.6, ..Pose::STANDING })], fps: 2.0 };
+        // Talk: perched, beak opening and closing.
+        let talk = Clip {
+            frames: vec![
+                st.frame(&Pose { bob: 0.6, ..Pose::STANDING }),
+                st.frame(&Pose { beak: 1.0, bob: 0.6, ..Pose::STANDING }),
+            ],
+            fps: 6.0,
+        };
         Sprite::from_clips(idle, fly, perch, talk)
     }
 }
@@ -207,75 +237,3 @@ fn load_clip(dir: &Path, fps: f32) -> Result<Clip, String> {
     Ok(Clip { frames, fps })
 }
 
-// --- placeholder art ------------------------------------------------------
-
-const PW: u32 = 28;
-const PH: u32 = 20;
-
-// Straight RGBA colours.
-const BODY: [u8; 4] = [58, 74, 107, 255]; // slate blue
-const WING: [u8; 4] = [92, 112, 156, 255]; // lighter blue
-const BEAK: [u8; 4] = [230, 150, 40, 255]; // orange
-const EYE: [u8; 4] = [20, 20, 28, 255]; // near-black
-
-/// Draw the placeholder bird with the wing oval centred at `wing_cy` (lets us
-/// build flap / folded poses from one routine). When `beak_open` is set the
-/// beak splits into two mandibles with a gap, so the bird reads as chirping.
-fn bird_frame(wing_cy: f32, beak_open: bool) -> Frame {
-    let mut px = vec![0u8; (PW * PH * 4) as usize];
-    let mut put = |x: i32, y: i32, c: [u8; 4]| {
-        if x >= 0 && y >= 0 && (x as u32) < PW && (y as u32) < PH {
-            let i = ((y as u32 * PW + x as u32) * 4) as usize;
-            px[i..i + 4].copy_from_slice(&c);
-        }
-    };
-    let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32, c: [u8; 4], put: &mut dyn FnMut(i32, i32, [u8; 4])| {
-        for y in 0..PH as i32 {
-            for x in 0..PW as i32 {
-                let nx = (x as f32 + 0.5 - cx) / rx;
-                let ny = (y as f32 + 0.5 - cy) / ry;
-                if nx * nx + ny * ny <= 1.0 {
-                    put(x, y, c);
-                }
-            }
-        }
-    };
-
-    // Body (oval) and head (circle), facing right.
-    ellipse(11.0, 11.0, 8.0, 6.0, BODY, &mut put);
-    ellipse(20.0, 8.0, 4.5, 4.5, BODY, &mut put);
-
-    // Tail wedge on the left.
-    for y in 8i32..14 {
-        for x in 0i32..4 {
-            if (y - 11).abs() <= x {
-                put(x, y, BODY);
-            }
-        }
-    }
-
-    // Wing: an oval over the body whose height selects the pose.
-    ellipse(10.0, wing_cy, 5.0, 2.5, WING, &mut put);
-
-    // Beak on the head, facing right. Closed: one wedge centred on y=7. Open:
-    // two wedges (upper/lower mandible) with a gap at y=7.
-    if beak_open {
-        for d in 0..3 {
-            for y in (6 - d)..=6 {
-                put(24 + d, y, BEAK);
-            }
-            for y in 8..=(8 + d) {
-                put(24 + d, y, BEAK);
-            }
-        }
-    } else {
-        for d in 0..3 {
-            for y in (7 - d)..=(7 + d) {
-                put(24 + d, y, BEAK);
-            }
-        }
-    }
-    put(21, 7, EYE);
-
-    Frame { w: PW, h: PH, pixels: px }
-}
