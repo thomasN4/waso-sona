@@ -27,6 +27,9 @@ use wayland_client::{
 
 use std::sync::mpsc::Receiver;
 
+use bird_protocol::{ControlMsg, Tuning};
+
+use crate::art::BirdStyle;
 use crate::brain::BirdBrain;
 use crate::bubble::BubbleState;
 use crate::cosmic::CosmicTracker;
@@ -66,6 +69,17 @@ pub struct AppState {
     bubble: Option<BubbleState>,
     /// Incoming `(text, duration_secs)` messages from the model thread.
     bubble_rx: Receiver<(String, f32)>,
+    /// Live tuning from the control panel (defaults reproduce the originals).
+    tuning: Tuning,
+    /// Current procedural style, or `None` when custom PNG art is loaded — its
+    /// poses/colours can't be re-rendered, so the appearance controls no-op
+    /// (frame-rate controls still apply).
+    style: Option<&'static BirdStyle>,
+    /// Incoming control-panel commands.
+    control_rx: Receiver<ControlMsg>,
+    /// `BIRD_DEBUG`: frame counter + last (state, pose) for throttled tracing.
+    dbg_frame: u64,
+    dbg_prev: Option<(&'static str, AnimId)>,
 }
 
 impl AppState {
@@ -78,9 +92,11 @@ impl AppState {
         layer: LayerSurface,
         input_region: Region,
         sprite: Sprite,
+        style: Option<&'static BirdStyle>,
         tracker: Option<CosmicTracker>,
         kwin_tracker: Option<KwinTracker>,
         bubble_rx: Receiver<(String, f32)>,
+        control_rx: Receiver<ControlMsg>,
     ) -> Self {
         AppState {
             registry_state,
@@ -101,6 +117,69 @@ impl AppState {
             kwin_tracker,
             bubble: None,
             bubble_rx,
+            tuning: Tuning::default(),
+            style,
+            control_rx,
+            dbg_frame: 0,
+            dbg_prev: None,
+        }
+    }
+
+    /// Apply one live-tuning command from the control panel.
+    fn apply_control(&mut self, msg: ControlMsg) {
+        match msg {
+            ControlMsg::SetTuning(t) => {
+                let anim_changed = t.anim != self.tuning.anim;
+                self.brain.set_tuning(t.motion);
+                self.tuning = t;
+                if anim_changed {
+                    self.apply_anim();
+                }
+            }
+            ControlMsg::SetStyle(name) => {
+                if let Some(st) = crate::art::style_by_name(&name) {
+                    self.style = Some(st);
+                    self.rebuild_sprite();
+                }
+            }
+            ControlMsg::Bubble { text, secs } => {
+                if !text.trim().is_empty() {
+                    self.bubble = Some(BubbleState { text, remaining: secs });
+                }
+            }
+            ControlMsg::Force(s) => self.brain.force(s),
+        }
+    }
+
+    /// Push the current animation tuning into the sprite. Frame rates apply to
+    /// any sprite; pose amplitudes need re-rendering, so they only affect the
+    /// procedural bird.
+    fn apply_anim(&mut self) {
+        let a = self.tuning.anim;
+        self.sprite.set_fps(AnimId::Idle, a.fps_idle);
+        self.sprite.set_fps(AnimId::Fly, a.fps_fly);
+        self.sprite.set_fps(AnimId::Perch, a.fps_perch);
+        self.sprite.set_fps(AnimId::Talk, a.fps_talk);
+        if self.style.is_some() {
+            self.rebuild_sprite();
+        }
+    }
+
+    /// Re-render the procedural sprite for the current style + animation tuning,
+    /// preserving the playing clip. Procedural frames are always 56x40, so the
+    /// bird's bounds normally don't change; only re-derive them (which recentres
+    /// and restarts wandering) if the canvas size actually did — e.g. switching
+    /// from custom PNG art to a built-in style.
+    fn rebuild_sprite(&mut self) {
+        let Some(st) = self.style else { return };
+        let current = self.sprite.current_anim();
+        let (ow, oh) = self.sprite.frame_size();
+        self.sprite = Sprite::procedural_tuned(st, &self.tuning.anim);
+        self.sprite.set_anim(current);
+        let (nw, nh) = self.sprite.frame_size();
+        if (nw, nh) != (ow, oh) && self.width > 0 && self.height > 0 {
+            self.brain.set_bounds(self.width, self.height, nw, nh);
+            self.prev_rect = None;
         }
     }
 
@@ -142,6 +221,11 @@ impl AppState {
             .or_else(|| self.kwin_tracker.as_ref().and_then(|t| t.active_window()));
         self.brain.update(dt, active.as_ref());
 
+        // Apply any live-tuning commands from the control panel before drawing.
+        while let Ok(msg) = self.control_rx.try_recv() {
+            self.apply_control(msg);
+        }
+
         // Accept the most-recent queued bubble message (drain the channel,
         // keep last), then tick the active bubble.
         while let Ok((text, duration)) = self.bubble_rx.try_recv() {
@@ -153,10 +237,27 @@ impl AppState {
             }
         }
 
-        // Chirp (Talk) while a bubble is up; otherwise follow the brain's pose.
-        let pose = if self.bubble.is_some() { AnimId::Talk } else { self.brain.pose() };
+        // Pick the body animation. Talk (a perched beak-chirp) must not suppress
+        // flight, or a talking bird that's relocating looks like it's floating.
+        let pose = choose_pose(self.bubble.is_some(), self.brain.pose());
         self.sprite.set_anim(pose);
         self.sprite.advance(dt);
+
+        // BIRD_DEBUG: trace state/pose/position to stderr — on every state/pose
+        // transition, plus a heartbeat every ~20 frames so a silent "float" still
+        // shows whether the position is changing and the fly frame is cycling.
+        if std::env::var_os("BIRD_DEBUG").is_some() {
+            self.dbg_frame = self.dbg_frame.wrapping_add(1);
+            let st = self.brain.state_name();
+            let changed = self.dbg_prev.is_none_or(|(ps, pp)| ps != st || pp != pose);
+            if changed || self.dbg_frame % 20 == 0 {
+                let (x, y) = self.brain.position();
+                let f = self.dbg_frame;
+                let fly = self.sprite.frame_idx();
+                eprintln!("bird f{f} state={st} pose={pose:?} pos=({x},{y}) flyframe={fly}");
+            }
+            self.dbg_prev = Some((st, pose));
+        }
 
         self.draw(qh);
     }
@@ -191,6 +292,7 @@ impl AppState {
                 canvas, w, h,
                 &bubble.text,
                 px, py, frame.w as i32, frame.h as i32,
+                &self.tuning.bubble,
             );
             bird_rect.union(&bubble_rect).clamp(w, h)
         } else {
@@ -213,6 +315,18 @@ impl AppState {
         surface.frame(qh, surface.clone());
         buffer.attach_to(&surface).expect("attach buffer");
         surface.commit();
+    }
+}
+
+/// Choose the body animation given whether a speech bubble is showing and the
+/// brain's movement pose. `Talk` is a grounded beak-chirp, so while the bird is
+/// flying we keep flapping (the bubble still floats along above it) and only
+/// chirp when it's perched or paused.
+fn choose_pose(bubble: bool, body: AnimId) -> AnimId {
+    match (bubble, body) {
+        (true, AnimId::Fly) => AnimId::Fly, // flapping wins; bubble still shows
+        (true, _) => AnimId::Talk,          // perched / idle → chirp
+        (false, body) => body,
     }
 }
 
@@ -333,3 +447,29 @@ delegate_shm!(AppState);
 delegate_layer!(AppState);
 delegate_registry!(AppState);
 // The COSMIC toplevel-info `Dispatch` impls live in `cosmic.rs`.
+
+#[cfg(test)]
+mod tests {
+    use super::choose_pose;
+    use crate::sprite::AnimId;
+
+    #[test]
+    fn talking_while_flying_keeps_flapping() {
+        // The bug: a bubble used to force Talk even mid-flight, so a talking bird
+        // relocating to a window looked like it was floating. Flying must win.
+        assert_eq!(choose_pose(true, AnimId::Fly), AnimId::Fly);
+    }
+
+    #[test]
+    fn talking_while_grounded_chirps() {
+        assert_eq!(choose_pose(true, AnimId::Perch), AnimId::Talk);
+        assert_eq!(choose_pose(true, AnimId::Idle), AnimId::Talk);
+    }
+
+    #[test]
+    fn silent_bird_uses_its_movement_pose() {
+        for body in [AnimId::Fly, AnimId::Perch, AnimId::Idle] {
+            assert_eq!(choose_pose(false, body), body);
+        }
+    }
+}

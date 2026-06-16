@@ -12,6 +12,7 @@
 //! All frames must share one canvas size.
 
 use crate::art::{style_from_env, BirdStyle, Pose};
+use bird_protocol::AnimTuning;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -91,6 +92,19 @@ impl Sprite {
         }
     }
 
+    /// The animation currently playing — used to restore it after a live rebuild.
+    pub fn current_anim(&self) -> AnimId {
+        self.current
+    }
+
+    /// Live-set one clip's playback rate (control panel). Works for procedural
+    /// and custom-PNG sprites alike, no rebuild needed.
+    pub fn set_fps(&mut self, id: AnimId, fps: f32) {
+        if let Some(clip) = self.clips.get_mut(&id) {
+            clip.fps = fps;
+        }
+    }
+
     /// Advance playback by `dt` seconds using the current clip's frame rate.
     pub fn advance(&mut self, dt: f32) {
         let clip = &self.clips[&self.current];
@@ -108,6 +122,11 @@ impl Sprite {
     pub fn current_frame(&self) -> &Frame {
         let clip = &self.clips[&self.current];
         &clip.frames[self.idx.min(clip.frames.len() - 1)]
+    }
+
+    /// Current frame index within the playing clip (used by tests + BIRD_DEBUG).
+    pub fn frame_idx(&self) -> usize {
+        self.idx
     }
 
     /// Canvas size shared by all frames (used for bounds/perch math).
@@ -181,35 +200,45 @@ impl Sprite {
         Sprite::procedural(style_from_env())
     }
 
-    /// Build the procedural bird in a given style.
+    /// Build the procedural bird in a given style with the default animation.
     pub fn procedural(st: &BirdStyle) -> Sprite {
+        Sprite::procedural_tuned(st, &AnimTuning::default())
+    }
+
+    /// Build the procedural bird in a given style, with the pose amplitudes and
+    /// frame rates scaled by `a` (the control panel's live animation tuning).
+    /// `AnimTuning::default()` reproduces the original keyframes exactly.
+    pub fn procedural_tuned(st: &BirdStyle, a: &AnimTuning) -> Sprite {
         // Fly: a ping-pong flap (up / mid / down / mid) so the wing sweeps
-        // smoothly instead of toggling between extremes.
+        // smoothly instead of toggling between extremes. `wing_amp` scales the
+        // whole sweep.
+        let w = a.wing_amp;
         let fly = Clip {
             frames: vec![
-                st.frame(&Pose { wing: 0.55, ..Pose::FLYING }),
-                st.frame(&Pose { wing: -0.05, ..Pose::FLYING }),
-                st.frame(&Pose { wing: -0.65, ..Pose::FLYING }),
-                st.frame(&Pose { wing: -0.05, ..Pose::FLYING }),
+                st.frame(&Pose { wing: 0.55 * w, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.05 * w, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.65 * w, ..Pose::FLYING }),
+                st.frame(&Pose { wing: -0.05 * w, ..Pose::FLYING }),
             ],
-            fps: 12.0,
+            fps: a.fps_fly,
         };
         // Idle: standing, the body gently settling between two heights.
         let idle = Clip {
             frames: vec![
                 st.frame(&Pose::STANDING),
-                st.frame(&Pose { bob: 1.0, ..Pose::STANDING }),
+                st.frame(&Pose { bob: 1.0 * a.idle_bob, ..Pose::STANDING }),
             ],
-            fps: 3.0,
+            fps: a.fps_idle,
         };
-        let perch = Clip { frames: vec![st.frame(&Pose { bob: 0.6, ..Pose::STANDING })], fps: 2.0 };
+        let perch_bob = 0.6 * a.perch_bob;
+        let perch = Clip { frames: vec![st.frame(&Pose { bob: perch_bob, ..Pose::STANDING })], fps: a.fps_perch };
         // Talk: perched, beak opening and closing.
         let talk = Clip {
             frames: vec![
-                st.frame(&Pose { bob: 0.6, ..Pose::STANDING }),
-                st.frame(&Pose { beak: 1.0, bob: 0.6, ..Pose::STANDING }),
+                st.frame(&Pose { bob: perch_bob, ..Pose::STANDING }),
+                st.frame(&Pose { beak: 1.0 * a.talk_beak, bob: perch_bob, ..Pose::STANDING }),
             ],
-            fps: 6.0,
+            fps: a.fps_talk,
         };
         Sprite::from_clips(idle, fly, perch, talk)
     }

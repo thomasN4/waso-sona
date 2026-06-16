@@ -1,0 +1,11 @@
+[package]
+name = "bird-protocol"
+version = "0.1.0"
+edition = "2024"
+description = "Shared tuning + control message types for desktop-bird and its control panel."
+license = "MIT"
+
+[dependencies]
+# Serialised over the control socket as newline-delimited JSON. The bird and the
+# panel both depend on this crate so the wire types can never drift apart.
+serde = { version = "1", features = ["derive"] }

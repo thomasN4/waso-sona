@@ -184,6 +184,12 @@ pub const STYLES: [BirdStyle; 10] = [
     },
 ];
 
+/// Look up a built-in style by name (case-insensitive), or `None` if unknown.
+/// Used by the control panel's live style switch.
+pub fn style_by_name(name: &str) -> Option<&'static BirdStyle> {
+    STYLES.iter().find(|s| s.name.eq_ignore_ascii_case(name))
+}
+
 /// Resolve `BIRD_STYLE` against [`STYLES`], defaulting to the first preset.
 pub fn style_from_env() -> &'static BirdStyle {
     let Some(want) = std::env::var_os("BIRD_STYLE") else { return &STYLES[0] };

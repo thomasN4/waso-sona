@@ -1,3 +1,8 @@
+[workspace]
+# desktop-bird is both the workspace root and the bird package. The control
+# panel and the shared wire-types crate are additional members.
+members = ["protocol", "panel"]
+
 [package]
 name = "desktop-bird"
 version = "0.1.0"
@@ -30,3 +35,7 @@ wayland-backend = "0.3"
 # crate's MIT-only policy (vs. libdbus-linked dbus-rs). No tokio feature: zbus
 # 5 defaults to its own internal async executor thread.
 zbus = "5"
+# Live tuning: the control panel (bird-panel) sends ControlMsgs over a Unix
+# socket as newline-delimited JSON. Shared wire types live in the protocol crate.
+bird-protocol = { path = "protocol" }
+serde_json = "1"
