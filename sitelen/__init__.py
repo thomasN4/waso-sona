@@ -4,6 +4,7 @@ from .glyphs import (
 )
 from .syllabify import syllabify
 from .translate import latin_to_ucsur, ucsur_to_latin
+from .phonotactics import is_legal_word
 
 __all__ = [
     "latin_to_ucsur",
@@ -13,4 +14,5 @@ __all__ = [
     "KU_SULI_WORDS",
     "WORD_TO_CODEPOINT",
     "CODEPOINT_TO_WORD",
+    "is_legal_word",
 ]

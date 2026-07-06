@@ -1,7 +1,7 @@
 """Tests for the Latin <-> sitelen pona UCSUR translator."""
 import pytest
 
-from sitelen import latin_to_ucsur, syllabify, ucsur_to_latin
+from sitelen import latin_to_ucsur, syllabify, ucsur_to_latin, is_legal_word
 from sitelen.glyphs import (
     CARTOUCHE_END, CARTOUCHE_EXT_END, CARTOUCHE_EXT_START, CARTOUCHE_START,
     END_REVERSE_LONG_GLYPH, LONG_GLYPH_EXTENSION, MIDDLE_COLON, MIDDLE_DOT,
@@ -24,9 +24,36 @@ def _g(word: str) -> str:
     ("kijetesantakalu", ["ki", "je", "te", "san", "ta", "ka", "lu"]),
     ("a", ["a"]),
     ("nnn", ["n", "n", "n"]),
+    ("wuwojiti", ["wu", "wo", "ji", "ti"]),
+    ("krai", ["k", "r", "a", "i"]),
+    ("", []),
 ])
 def test_syllabify(word: str, expected: list[str]) -> None:
     assert syllabify(word) == expected
+
+
+# ---- Phonotactics ----
+
+@pytest.mark.parametrize("word,expected",
+                         [(v, True) for v in WORD_TO_CODEPOINT.keys()] +  # ordinary legal words
+                         [("n", True),  # rule 6
+                          ("Sonja", True),  # case-insensitive
+                          ("N", True),  # case-insensitive
+                          ("juwi", True),  # legal shape, not a word
+                          ("", False),  # empty
+                          ("tin", False),  # rule 4
+                          ("woli", False),  # rule 4
+                          ("wuwojiti", False),  # rule 4
+                          ("aula", False),  # rule 3
+                          ("aa", False),  # rule 3
+                          ("panma", False),  # rule 5
+                          ("anna", False),  # rule 5
+                          ("krai", False),  # illegal characters / not one word
+                          ("toki!", False),  # illegal characters / not one word
+                          ("toki pona!", False),  # illegal characters / not one word
+                          ])
+def test_is_legal_word(word: str, expected: bool) -> None:
+    assert is_legal_word(word) == expected
 
 
 # ---- Latin -> UCSUR ----
