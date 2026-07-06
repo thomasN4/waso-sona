@@ -7,6 +7,7 @@
 
 use crate::font;
 use crate::sprite::Frame;
+use bird_protocol::BubbleTuning;
 
 /// An axis-aligned rectangle in buffer pixels.
 #[derive(Clone, Copy, Debug)]
@@ -88,23 +89,13 @@ fn premul(channel: u8, alpha: u8) -> u8 {
 // Speech bubble (sitelen pona, drawn with the bundled nasin-nanpa font)
 // ---------------------------------------------------------------------------
 
-/// sitelen pona glyph height, in pixels, for bubble text.
-const TEXT_PX: f32 = 22.0;
-/// Inner padding between the text and the bubble border.
-const PAD: i32 = 6;
-/// Height of the triangular tail under (or over) the bubble.
-const TAIL: i32 = 6;
-/// Corner rounding radius of the bubble box.
-const RADIUS: i32 = 5;
-/// Text ink (dark grey), composited over the white bubble.
-const INK: u32 = 0x22;
-
 /// Draw a speech bubble above (or below, if too close to the top) the bird.
 ///
 /// `text` is UTF-8 sitelen pona (UCSUR); `bird_{x,y}` is the top-left of the
-/// sprite and `bird_{w,h}` its size. Returns the bounding [`Rect`] of the whole
-/// bubble (box + tail + shadow) so the caller can union it into the damage
-/// region.
+/// sprite and `bird_{w,h}` its size. The look (text size, padding, tail, corner
+/// radius, ink) comes from `t` — `BubbleTuning::default()` reproduces the
+/// original constants. Returns the bounding [`Rect`] of the whole bubble (box +
+/// tail + shadow) so the caller can union it into the damage region.
 pub fn draw_bubble(
     canvas: &mut [u8],
     buf_w: u32,
@@ -114,16 +105,24 @@ pub fn draw_bubble(
     bird_y: i32,
     bird_w: i32,
     bird_h: i32,
+    t: &BubbleTuning,
 ) -> Rect {
-    let line = font::layout(text, TEXT_PX);
+    // Bind the tuned values once; the body below reads them like the old consts.
+    let text_px = t.text_px.max(1.0);
+    let pad = t.pad.max(0);
+    let tail = t.tail.max(0);
+    let radius = t.radius.max(0);
+    let ink = t.ink.min(255);
+
+    let line = font::layout(text, text_px);
 
     // Measure text, capped so the bubble never exceeds half the screen width.
     let max_text_w = (buf_w as i32 / 2).max(80);
     let tw = line.width.min(max_text_w).max(1);
     let th = line.height.max(1);
 
-    let bw = tw + PAD * 2 + 2; // +2 for the 1px border on each side
-    let bh = th + PAD * 2 + 2;
+    let bw = tw + pad * 2 + 2; // +2 for the 1px border on each side
+    let bh = th + pad * 2 + 2;
 
     // Horizontal: centre over the bird, clamped within the buffer.
     let cx = bird_x + bird_w / 2;
@@ -131,27 +130,27 @@ pub fn draw_bubble(
 
     // Vertical: prefer above; fall back to below.
     let (by, tail_below) = {
-        let above = bird_y - bh - TAIL;
+        let above = bird_y - bh - tail;
         if above >= 0 {
             (above, true)
         } else {
-            (bird_y + bird_h + TAIL, false)
+            (bird_y + bird_h + tail, false)
         }
     };
 
     // Soft drop shadow (rounded, translucent), offset down-right, behind the box.
-    rounded_rect(canvas, buf_w, buf_h, bx + 2, by + 2, bw, bh, Some((0, 0, 0, 0x40)), None, RADIUS);
+    rounded_rect(canvas, buf_w, buf_h, bx + 2, by + 2, bw, bh, Some((0, 0, 0, 0x40)), None, radius);
     // White body + dark rounded border.
     rounded_rect(
         canvas, buf_w, buf_h, bx, by, bw, bh,
-        Some((0xFF, 0xFF, 0xFF, 0xFF)), Some((0x44, 0x44, 0x44, 0xFF)), RADIUS,
+        Some((0xFF, 0xFF, 0xFF, 0xFF)), Some((0x44, 0x44, 0x44, 0xFF)), radius,
     );
 
     // Triangular tail. The tip points toward the bird's centre line, kept clear
     // of the rounded corners.
-    let tail_cx = cx.clamp(bx + TAIL + RADIUS, bx + bw - TAIL - RADIUS);
-    for i in 0..TAIL {
-        let half = TAIL - 1 - i; // widest near the bubble, narrowest at the tip
+    let tail_cx = cx.clamp(bx + tail + radius, bx + bw - tail - radius);
+    for i in 0..tail {
+        let half = tail - 1 - i; // widest near the bubble, narrowest at the tip
         let ty = if tail_below { by + bh + i } else { by - 1 - i };
         for tx in (tail_cx - half)..=(tail_cx + half) {
             put_pixel(canvas, buf_w, buf_h, tx, ty, 0xFF, 0xFF, 0xFF, 0xFF);
@@ -164,8 +163,8 @@ pub fn draw_bubble(
     }
 
     // Composite the rasterized sitelen pona over the opaque white interior.
-    let text_x = bx + 1 + PAD;
-    let text_y = by + 1 + PAD;
+    let text_x = bx + 1 + pad;
+    let text_y = by + 1 + pad;
     let x_min = bx + 1;
     let x_max = bx + bw - 2;
     for g in &line.glyphs {
@@ -181,15 +180,15 @@ pub fn draw_bubble(
                     continue; // clip to the interior when the text was width-capped
                 }
                 // Ink over opaque white: out = white*(255-c)/255 + ink*c/255.
-                let out = ((255 * (255 - c) + INK * c) / 255) as u8;
+                let out = ((255 * (255 - c) + ink * c) / 255) as u8;
                 put_pixel(canvas, buf_w, buf_h, x, y, out, out, out, 0xFF);
             }
         }
     }
 
     // Bounding rect covering box, tail, and the +2 shadow.
-    let top = if tail_below { by } else { by - TAIL };
-    Rect { x: bx, y: top, w: bw + 2, h: bh + TAIL + 2 }
+    let top = if tail_below { by } else { by - tail };
+    Rect { x: bx, y: top, w: bw + 2, h: bh + tail + 2 }
 }
 
 // --- pixel helpers ----------------------------------------------------------

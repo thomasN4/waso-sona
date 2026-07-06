@@ -11,6 +11,7 @@ mod app;
 mod art;
 mod brain;
 mod bubble;
+mod control;
 mod cosmic;
 mod font;
 mod kwin;
@@ -120,7 +121,16 @@ fn main() {
     // SlotPool grows on demand; seed it with a common full-HD-sized buffer.
     let pool = SlotPool::new(1920 * 1080 * 4, &shm).expect("failed to create the shm pool");
 
-    let sprite = Sprite::load_from_env().unwrap_or_else(Sprite::placeholder);
+    // Custom PNG art (BIRD_SPRITE_DIR) has no procedural style to retune, so the
+    // panel's appearance controls don't apply to it; otherwise track the chosen
+    // style so live restyling / amplitude tuning can re-render the bird.
+    let (sprite, style) = match Sprite::load_from_env() {
+        Some(s) => (s, None),
+        None => {
+            let st = art::style_from_env();
+            (Sprite::procedural(st), Some(st))
+        }
+    };
 
     let registry_state = RegistryState::new(&globals);
 
@@ -170,6 +180,10 @@ fn main() {
         }
     });
 
+    // Live tuning: the bird-panel connects over a Unix socket and streams
+    // ControlMsgs; the main loop drains them every frame (see control.rs).
+    let control_rx = control::start();
+
     let mut state = AppState::new(
         registry_state,
         OutputState::new(&globals, &qh),
@@ -178,9 +192,11 @@ fn main() {
         layer,
         region,
         sprite,
+        style,
         tracker,
         kwin_tracker,
         bubble_rx,
+        control_rx,
     );
 
     loop {
@@ -224,7 +240,10 @@ fn write_preview(text: &str, out: &std::path::Path) -> Result<(), String> {
     render::blit(&mut canvas, W, H, frame, bird_x, bird_y, false);
 
     // Speech bubble above it.
-    let _ = render::draw_bubble(&mut canvas, W, H, text, bird_x, bird_y, fw, fh);
+    let _ = render::draw_bubble(
+        &mut canvas, W, H, text, bird_x, bird_y, fw, fh,
+        &bird_protocol::BubbleTuning::default(),
+    );
 
     // Convert premultiplied BGRA → straight RGBA for a PNG with alpha.
     let mut rgba = vec![0u8; canvas.len()];

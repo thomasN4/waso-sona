@@ -19,24 +19,11 @@
 
 use rand::RngExt;
 
+use bird_protocol::{ForceState, MotionTuning};
+
 use crate::render::Rect;
 use crate::sprite::AnimId;
 use crate::tracker::WindowInfo;
-
-/// Travel speed, pixels/sec.
-const SPEED: f32 = 160.0;
-/// Distance (px) at which a target counts as reached.
-const ARRIVE_EPS: f32 = 3.0;
-/// While perched, a window move up to this far is followed smoothly; beyond it
-/// we treat it as a new target and re-approach.
-const FOLLOW_EPS: f32 = 48.0;
-/// Seconds perched before taking a flit (random in this range).
-const FLIT_DELAY: (f32, f32) = (4.0, 10.0);
-/// How far a flit strays from the perch.
-const FLIT_RADIUS: f32 = 120.0;
-/// Wander: chance of pausing on arrival, and pause length (s).
-const WANDER_IDLE_CHANCE: f64 = 0.5;
-const WANDER_IDLE: (f32, f32) = (0.4, 1.6);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum State {
@@ -63,9 +50,14 @@ pub struct BirdBrain {
     idle: f32,
     /// Seconds left before the next flit while perched.
     flit_timer: f32,
+    /// Seconds left to keep flapping after following a window move while
+    /// perched (see `tuning.follow_flap_linger`).
+    flap_linger: f32,
     facing_left: bool,
     /// Bounds set (surface configured) yet?
     ready: bool,
+    /// Live-tunable movement/timing knobs (defaults reproduce the originals).
+    tuning: MotionTuning,
 }
 
 impl BirdBrain {
@@ -82,8 +74,37 @@ impl BirdBrain {
             state: State::Wander,
             idle: 0.0,
             flit_timer: 0.0,
+            flap_linger: 0.0,
             facing_left: false,
             ready: false,
+            tuning: MotionTuning::default(),
+        }
+    }
+
+    /// Replace the live movement/timing tuning (from the control panel).
+    pub fn set_tuning(&mut self, t: MotionTuning) {
+        self.tuning = t;
+    }
+
+    /// Force a behaviour state for testing. Approach/Perch/Flit only stay put
+    /// while a window is focused; with none active the next `update` falls back
+    /// to wandering. `Wander` always takes effect.
+    pub fn force(&mut self, s: ForceState) {
+        if !self.ready {
+            return;
+        }
+        match s {
+            ForceState::Wander => self.enter_wander(),
+            ForceState::Approach => self.state = State::Approach,
+            ForceState::Perch => {
+                self.state = State::Perch;
+                self.flap_linger = 0.0;
+                self.flit_timer = self.rand_flit_delay();
+            }
+            ForceState::Flit => {
+                let here = (self.x, self.y);
+                self.start_flit(here);
+            }
         }
     }
 
@@ -124,9 +145,20 @@ impl BirdBrain {
         self.facing_left
     }
 
+    /// Human-readable current state, for `BIRD_DEBUG` tracing.
+    pub fn state_name(&self) -> &'static str {
+        match self.state {
+            State::Wander => "wander",
+            State::Approach => "approach",
+            State::Perch => "perch",
+            State::Flit => "flit",
+        }
+    }
+
     /// Which animation clip the renderer should play.
     pub fn pose(&self) -> AnimId {
         match self.state {
+            State::Perch if self.flap_linger > 0.0 => AnimId::Fly,
             State::Perch => AnimId::Perch,
             State::Wander if self.idle > 0.0 => AnimId::Idle,
             _ => AnimId::Fly,
@@ -154,6 +186,13 @@ impl BirdBrain {
         self.ty = rng.random_range(0.0..=self.max_y);
     }
 
+    /// A random flit delay in `[min, max)`, tolerant of a collapsed range
+    /// (panel sliders can set min == max).
+    fn rand_flit_delay(&self) -> f32 {
+        let (lo, hi) = (self.tuning.flit_delay_min, self.tuning.flit_delay_max);
+        if hi > lo { rand::rng().random_range(lo..hi) } else { lo }
+    }
+
     fn update_wander(&mut self, dt: f32) {
         if self.idle > 0.0 {
             self.idle -= dt;
@@ -161,8 +200,9 @@ impl BirdBrain {
         }
         if self.step_toward(dt) {
             let mut rng = rand::rng();
-            if rng.random_bool(WANDER_IDLE_CHANCE) {
-                self.idle = rng.random_range(WANDER_IDLE.0..WANDER_IDLE.1);
+            if rng.random_bool(self.tuning.wander_idle_chance.clamp(0.0, 1.0)) {
+                let (lo, hi) = (self.tuning.wander_idle_min, self.tuning.wander_idle_max);
+                self.idle = if hi > lo { rng.random_range(lo..hi) } else { lo };
             }
             self.pick_wander_target();
         }
@@ -182,7 +222,7 @@ impl BirdBrain {
             }
             State::Perch => {
                 let moved = (perch.0 - self.tx).hypot(perch.1 - self.ty);
-                if moved > FOLLOW_EPS {
+                if moved > self.tuning.follow_eps {
                     self.state = State::Approach;
                 }
                 self.tx = perch.0;
@@ -196,11 +236,17 @@ impl BirdBrain {
             State::Approach => {
                 if self.step_toward(dt) {
                     self.state = State::Perch;
-                    self.flit_timer = rand::rng().random_range(FLIT_DELAY.0..FLIT_DELAY.1);
+                    self.flit_timer = self.rand_flit_delay();
                 }
             }
             State::Perch => {
+                let (px, py) = (self.x, self.y);
                 self.step_toward(dt); // ease along if the window is drifting
+                if (self.x - px).abs() > 0.01 || (self.y - py).abs() > 0.01 {
+                    self.flap_linger = self.tuning.follow_flap_linger;
+                } else {
+                    self.flap_linger = (self.flap_linger - dt).max(0.0);
+                }
                 self.flit_timer -= dt;
                 if self.flit_timer <= 0.0 {
                     self.start_flit(perch);
@@ -221,15 +267,16 @@ impl BirdBrain {
     fn start_flit(&mut self, perch: (f32, f32)) {
         let mut rng = rand::rng();
         // Stray around the perch, biased upward (birds flit up/around, not down
-        // into the window).
-        let dx = rng.random_range(-FLIT_RADIUS..FLIT_RADIUS);
-        let dy = rng.random_range(-FLIT_RADIUS..FLIT_RADIUS / 3.0);
+        // into the window). A zero radius (panel slider) means "hop in place".
+        let r = self.tuning.flit_radius;
+        let dx = if r > 0.0 { rng.random_range(-r..r) } else { 0.0 };
+        let dy = if r > 0.0 { rng.random_range(-r..r / 3.0) } else { 0.0 };
         self.tx = (perch.0 + dx).clamp(0.0, self.max_x);
         self.ty = (perch.1 + dy).clamp(0.0, self.max_y);
         self.state = State::Flit;
     }
 
-    /// Move toward `(tx, ty)` at `SPEED`, updating facing. Returns whether the
+    /// Move toward `(tx, ty)` at `tuning.speed`, updating facing. Returns whether the
     /// target was reached this step.
     fn step_toward(&mut self, dt: f32) -> bool {
         let dx = self.tx - self.x;
@@ -239,12 +286,12 @@ impl BirdBrain {
         if dx.abs() > 0.5 {
             self.facing_left = dx < 0.0;
         }
-        if dist <= ARRIVE_EPS {
+        if dist <= self.tuning.arrive_eps {
             self.x = self.tx;
             self.y = self.ty;
             return true;
         }
-        let step = SPEED * dt;
+        let step = self.tuning.speed * dt;
         if step >= dist {
             self.x = self.tx;
             self.y = self.ty;
@@ -323,6 +370,32 @@ mod tests {
     }
 
     #[test]
+    fn flaps_while_following_a_dragged_window() {
+        let mut b = brain();
+        let mut w = win(400, 300, 200, 150);
+        for _ in 0..60 {
+            b.update(0.05, Some(&w));
+        }
+        assert_eq!(b.state, State::Perch);
+        assert_eq!(b.pose(), AnimId::Perch);
+
+        // Drag downward in small steps, as interactive moves arrive.
+        for _ in 0..20 {
+            w.geometry.y += 4;
+            b.update(0.05, Some(&w));
+            assert_eq!(b.state, State::Perch, "small moves should not re-approach");
+            assert_eq!(b.pose(), AnimId::Fly, "should flap while sliding along");
+        }
+
+        // Drag stops: settle back to the perch pose once the linger drains.
+        for _ in 0..10 {
+            b.update(0.05, Some(&w));
+        }
+        assert_eq!(b.state, State::Perch);
+        assert_eq!(b.pose(), AnimId::Perch);
+    }
+
+    #[test]
     fn returns_to_wander_when_window_closes() {
         let mut b = brain();
         let w = win(400, 300, 200, 150);
@@ -332,6 +405,74 @@ mod tests {
         assert_eq!(b.state, State::Perch);
         b.update(0.05, None);
         assert_eq!(b.state, State::Wander);
+    }
+
+    /// Reproduce the real app loop: `update` is called every frame (~60 fps),
+    /// but the compositor reports the window position only sparsely (here every
+    /// `update_every` frames). Drive the full pose→sprite pipeline and report,
+    /// for the frames where the bird actually moved, what pose it showed and
+    /// whether the fly animation cycled. This is the case the per-frame
+    /// `flaps_while_following_a_dragged_window` test doesn't cover.
+    #[test]
+    fn flaps_while_following_sparsely_updated_window() {
+        use crate::sprite::{AnimId, Sprite};
+        let dt = 1.0 / 60.0;
+        let mut b = BirdBrain::new();
+        // Disable random flits so the only motion under test is the window-follow.
+        // (A flit's brief landing frame — where the state flips to Perch as the
+        // bird snaps the last pixel — would otherwise add nondeterministic noise.)
+        b.set_tuning(MotionTuning { flit_delay_min: 1.0e6, flit_delay_max: 1.0e6, ..MotionTuning::default() });
+        let mut sprite = Sprite::procedural(crate::art::style_from_env());
+        let (sw, sh) = sprite.frame_size();
+        b.set_bounds(1920, 1080, sw, sh);
+
+        // Settle onto a window first.
+        let mut w = win(800, 500, 400, 300);
+        for _ in 0..240 {
+            b.update(dt, Some(&w));
+        }
+        assert_eq!(b.state, State::Perch);
+
+        // Now drag the window leftward across the screen; the compositor only
+        // reports a new position every `update_every` frames (so most frames
+        // re-use the same geometry, exactly like the live app).
+        let update_every = 6; // ~10 Hz position updates at 60 fps
+        let mut moving_frames = 0;
+        let mut moving_but_not_fly = 0;
+        let mut fly_indices = std::collections::BTreeSet::new();
+        for f in 0..600 {
+            if f % update_every == 0 && w.geometry.x > 60 {
+                w.geometry.x -= 30; // 30 px per reported step ≈ 300 px/s drag
+            }
+            let (before_x, before_y) = b.position();
+            b.update(dt, Some(&w));
+            let (after_x, after_y) = b.position();
+
+            let pose = b.pose();
+            sprite.set_anim(pose);
+            sprite.advance(dt);
+
+            let moved = (after_x - before_x).abs() + (after_y - before_y).abs() >= 1;
+            if moved {
+                moving_frames += 1;
+                if pose != AnimId::Fly {
+                    moving_but_not_fly += 1;
+                }
+                if pose == AnimId::Fly {
+                    fly_indices.insert(sprite.frame_idx());
+                }
+            }
+        }
+
+        assert!(moving_frames > 30, "bird barely moved ({moving_frames}); test setup is wrong");
+        assert_eq!(
+            moving_but_not_fly, 0,
+            "bird MOVED on {moving_but_not_fly}/{moving_frames} frames while showing a non-fly pose (floats without flapping)"
+        );
+        assert!(
+            fly_indices.len() >= 2,
+            "fly animation never advanced past frame {fly_indices:?} while moving (frozen wings)"
+        );
     }
 
     #[test]

@@ -1,0 +1,20 @@
+[package]
+name = "bird-panel"
+version = "0.1.0"
+edition = "2024"
+description = "Real-time control panel for tuning desktop-bird's behaviour."
+license = "MIT"
+
+[[bin]]
+name = "bird-panel"
+path = "src/main.rs"
+
+[dependencies]
+# Immediate-mode GUI for the slider panel. eframe bundles egui + a window/loop.
+eframe = "0.29"
+# Shared wire types + the socket path, identical to the bird side.
+bird-protocol = { path = "../protocol" }
+# Encode ControlMsgs as newline-delimited JSON on the socket.
+serde_json = "1"
+# "Copy values" exports the current tuning as a TOML block for feedback.
+toml = "0.8"
