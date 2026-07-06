@@ -217,8 +217,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Toki Pona corpora fetched by scripts/fetch_data.py
-data/
+# Toki Pona corpora fetched by scripts/fetch_data.py — except the hand-written
+# bird gold eval set, which no script can regenerate, so it lives in git
+# (`data/` alone would block the negation: git never descends into a fully
+# ignored directory, so the parents must be re-included explicitly)
+data/*
+!data/processed/
+data/processed/*
+!data/processed/bird_gold.jsonl
 
 # Model artifacts: QLoRA runs, merged checkpoints, GGUF, student runs, tokenizer
 models/

@@ -819,7 +819,18 @@ for length/predicate (proving the whitelist isn't masking real errors).
 
 ### Data pipeline (Phase A)
 
-Four scripts, in order:
+One hand-authored artifact, then four scripts in order:
+
+0. **`data/processed/bird_gold.jsonl` — the held-out gold eval set
+   (hand-written, no generator).** Same schema as the training set
+   (`{ctx, text, mood, source}`, one JSON object per line; `ctx == ""` for
+   ambient); every line must pass `filter_bird_line`. It is written by hand
+   *because* it is the eval target — deliberately not produced by any script.
+   Both downstream consumers need it: `assemble_bird.py` excludes colliding
+   records (train ∩ gold = ∅) and `train_bird.py` early-stops on its masked
+   loss (and crashes if the file is missing). Since it can't be regenerated,
+   it is the one `data/` artifact that belongs in git — `.gitignore` carves it
+   out; commit it from a checkout that has it.
 
 1. **`scripts/build_bird_english.py`** — authors the English
    `(scene_en, reply_en, mood, source)` seed corpus in-voice. The persona is
@@ -908,12 +919,13 @@ with random `bird_persona.SCENES` reactions to show the conditioned behavior.
 
 ### Status
 
-All six scripts (`bird_persona`, `build_bird_english`, `translate_bird`,
+All seven scripts (`bird_persona`, `build_bird_english`, `translate_bird`,
 `gen_bird_haiku`, `assemble_bird`, `train_bird`, `talk_to_bird`) are built and
 self-checking. The data pipeline and fine-tune have **not yet been run
 end-to-end** on `main` — no bird checkpoint is committed. To run the full
-pipeline: build the English seeds, translate them (needs the `waso-translator`
-Ollama model from Stage 2 v2), generate the Haiku bulk (needs
-`ANTHROPIC_API_KEY`), assemble, then fine-tune against the base student
+pipeline: author the gold eval set (step 0 above), build the English seeds,
+translate them (needs the `waso-translator` Ollama model from Stage 2 v2),
+generate the Haiku bulk (needs `ANTHROPIC_API_KEY`), assemble, then fine-tune
+against the base student
 deliverable. The `bird_persona.py` self-check and `train_bird.py --dry-run`
 mask check are the pre-flight gates that need no GPU or API key.

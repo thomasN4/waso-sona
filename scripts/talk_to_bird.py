@@ -116,8 +116,10 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(args.interval)
         return 0
 
+    val = state.get("val_loss")
     print(f"checkpoint: {ckpt.relative_to(REPO_ROOT)}  "
-          f"(gold val_loss={state.get('val_loss'):.4f})", file=sys.stderr)
+          f"(gold val_loss={f'{val:.4f}' if val is not None else 'n/a'})",
+          file=sys.stderr)
     for i in range(args.n):
         scene = args.scene if args.scene is not None else ""
         text = chirp(scene, args.seed + i)

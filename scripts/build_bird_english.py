@@ -313,6 +313,7 @@ def _gemma_expand(n: int, model: str) -> list[dict]:
         for p in _authored_pairs(2, 0)[:12]
     )
     out: list[dict] = []
+    stale_rounds = 0  # a model that keeps answering unparseably would loop forever
     while len(out) < n:
         prompt = (
             f"{persona}\n\nExamples:\n{examples}\n\n"
@@ -324,6 +325,7 @@ def _gemma_expand(n: int, model: str) -> list[dict]:
         except Exception as exc:  # noqa: BLE001
             print(f"  gemma expand stopped: {exc}", file=sys.stderr)
             break
+        before = len(out)
         for line in text.splitlines():
             if "BIRD:" not in line or "SCENE:" not in line:
                 continue
@@ -337,6 +339,14 @@ def _gemma_expand(n: int, model: str) -> list[dict]:
             if reply:
                 out.append({"scene_en": scene, "reply_en": reply,
                             "mood": "gemma", "source": "gemma"})
+        if len(out) == before:
+            stale_rounds += 1
+            if stale_rounds >= 3:
+                print("  gemma expand stopped: 3 rounds with no parseable pairs",
+                      file=sys.stderr)
+                break
+        else:
+            stale_rounds = 0
     return out[:n]
 
 

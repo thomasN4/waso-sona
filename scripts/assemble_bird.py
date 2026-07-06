@@ -14,7 +14,7 @@ held-out eval set stays in data/processed/bird_gold.jsonl.
 Usage::
 
     python scripts/assemble_bird.py
-    python scripts/assemble_bird.py --max-teacher 150 --interject-reps 3
+    python scripts/assemble_bird.py --max-haiku 150 --interject-reps 3
 """
 from __future__ import annotations
 
