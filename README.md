@@ -51,7 +51,7 @@ Wayland integration details.
 | Path | What's there |
 |------|--------------|
 | `sitelen/` | Bidirectional Latin Toki Pona ↔ sitelen pona UCSUR translator (first-letter cartouches, per pu). |
-| `scripts/` | The model pipeline — fetch/filter corpora, train the teacher, augment, train the student, and `talk_to_bird.py` / `bird_persona.py` for the bird's voice. |
+| `scripts/` | The model pipeline — fetch/filter corpora, train the teacher, augment, train the student, then fine-tune the bird persona (`build_bird_english.py`, `gen_bird_haiku.py`, `translate_bird.py`, `assemble_bird.py`, `train_bird.py`), with `talk_to_bird.py` / `bird_persona.py` for inference and the persona spec. |
 | `desktop-bird/` | The Rust/Wayland desktop pet app (renderer, behaviour, speech bubbles, window trackers). |
 | `data/` | Raw and processed training corpora. |
 | `models/` | Trained checkpoints and tokenizers. |

@@ -20,7 +20,9 @@ Three stages:
 3. **Student (built — the actual product).** Train the tiny TP LM **from
    scratch** (nanoGPT-style decoder). Training on the real+translated+synthetic
    mix dropped the honest `real_loss` from ~4.0 (synthetic-only) → 2.16 → **2.08**
-   with a balance-corrected 15 M-param model (see "Student runs").
+   with a balance-corrected 15 M-param model (see "Student runs"). A small
+   **persona-SFT pass** (`train_bird.py`) then fine-tunes it into the cheerful
+   desktop-bird voice — see "Bird persona SFT".
 
 ```
   Stage 1 — TEACHER (built)
@@ -49,9 +51,12 @@ Three stages:
         │  train_student.py   (nanoGPT-style decoder, ~5M params)
         ▼
     tiny Toki Pona LM   ◀── the actual product
+        │  train_bird.py (persona SFT, reply-only masking)
+        ▼
+    talking-bird checkpoint  (models/student_runs/bird-<UTC>/best.pt)
 
-  Application layer (not in training; wraps the student model)
-    UCSUR in  ──▶ sitelen.ucsur_to_latin ──▶ tiny LM ──▶ Latin out
+  Application layer (not in training; wraps the bird model)
+    UCSUR in  ──▶ sitelen.ucsur_to_latin ──▶ bird LM ──▶ Latin out
     Latin out ──▶ sitelen.latin_to_ucsur ──▶ UCSUR display
 ```
 
@@ -742,3 +747,173 @@ identical capability map — it actually edges the deliverable on mi/sina (88 %)
 and encyclopedic (55 %) continuations — at **~1.3× the throughput**. For a
 latency-sensitive target (e.g. an on-device IME) v2 is a strong, cheaper base;
 for quality/perplexity-sensitive targets, use the rebalanced deliverable.
+
+---
+
+## Bird persona SFT
+
+The base student is a fluent Latin-TP language model but has no persona and no
+notion of turn-taking — it just continues text. The persona-SFT pass turns it
+into a **conditioned generator**: given an optional Toki Pona *scene*
+describing the desktop-bird's surroundings, it emits one short in-character
+utterance and stops. This is what the desktop-bird app pipes to its speech
+bubbles.
+
+### Framing
+
+Every training example is framed:
+
+```
+<bos> {scene}. waso li toki e ni: {reply} <eos>      (reactive)
+<bos> waso li toki e ni: {reply} <eos>               (ambient: scene == "")
+```
+
+The turn marker `waso li toki e ni:` ("the bird says this:") is the cue — fully
+in-vocabulary Toki Pona, so no new tokenizer symbols are needed (the SP vocab is
+frozen at 2048 and aligned to the base embeddings). Loss is computed on the
+**reply tokens + EOS only** — the prompt prefix is masked — so the model learns
+`p(reply | scene)` and to stop after one bubble, not how to generate scenes.
+This is the from-scratch analog of the teacher pipeline's
+`assistant_only_loss=True`.
+
+At inference we feed everything up to and including the cue and sample the
+reply; `scene=""` gives a free chirp, a populated scene gives a reactive
+comment. The eventual desktop-bird `BirdBrain` state + window geometry map to a
+`scene` string by a deterministic templater; the `SCENES` table in
+`bird_persona.py` seeds that distribution so the model generalizes when wired
+up.
+
+### Persona spec — `scripts/bird_persona.py`
+
+Single source of truth for the persona. Holds:
+
+- **`PERSONA_CARD`** — the voice: a small, curious, cheerful bird that lives
+  inside the computer, perches on windows, watches the human work, treats the
+  glowing screen as its little world. Casual and chirpy, never formal; very
+  brief (≤ ~10 words, one bubble); first person (`mi`), often addresses the
+  human (`jan o`, `sina`); lots of `a`-particles. Lightly machine-aware
+  (`lon ilo`, `lipu`, `sitelen li suno`) but never names apps or brands (TP
+  can't, and the bird wouldn't).
+- **`CUE`** — the turn marker `waso li toki e ni:`.
+- **`INTERJECTIONS`** — a curated whitelist of bare interjections (`mu!`,
+  `pona a!`, `toki a!`) the bird may chirp on their own. A desktop pet that
+  only ever spoke in full clauses would be lifeless.
+- **`SCENES`** — TP scene templates keyed by BirdBrain state/mood
+  (`perch_work`, `perch_idle`, `night`, `day`, `wander`, `approach`, `flit`,
+  `outside`, `play`) — the conditioning distribution the templater will draw
+  from.
+- **`FEWSHOT`** — ambient exemplars for direct `waso-teacher` generation.
+- **`filter_bird_line`** — the single quality gate every data stream and the
+  gold set share. Wraps the strict `augment_corpus._filter_sentence` but admits
+  whitelisted interjections (waiving only `too_short` / `missing_predicate`;
+  all other rules — unknown word, double-`li`, `li e`, leading-`li`, unigram /
+  bigram repetition — still apply), caps the bubble at 12 words, and forbids
+  proper names (the bird never name-drops).
+- **`build_prompt` / `frame_example`** — the inference/training prefix and full
+  training string (no `<bos>`/`<eos>`; the trainer adds those). The trainer
+  derives the mask boundary from the token length of `build_prompt(scene)`.
+
+Run `python scripts/bird_persona.py` to self-check: every TP constant passes
+the bird gate, and every whitelisted interjection fails the *strict* gate only
+for length/predicate (proving the whitelist isn't masking real errors).
+
+### Data pipeline (Phase A)
+
+Four scripts, in order:
+
+1. **`scripts/build_bird_english.py`** — authors the English
+   `(scene_en, reply_en, mood, source)` seed corpus in-voice. The persona is
+   injected here, in English, where it's easy to keep coherent; the Toki Pona
+   comes from the translator (next step) which preserves content/register.
+   `scene_en == ""` is an ambient line (free chirp); otherwise a reactive pair.
+   Each English line is kept simple and concrete so it translates into clean TP
+   instead of unknown words (reuses `build_english_source.is_simple`).
+   Optionally `--expand` with Gemma-generated pairs. Output →
+   `data/processed/bird_english.jsonl`.
+
+2. **`scripts/translate_bird.py`** — translates both sides of each English pair
+   into TP via the Ollama-served `waso-translator` (the proven Stage-2-v2
+   lever): the reply becomes the bird's utterance, the scene becomes the
+   conditioning context. Reuses `translate_corpus` / `augment_corpus` wholesale
+   — `_ollama_generate` (chat endpoint, so the translator's chat template wraps
+   the prompt), `_translate_prompt`, `_split_into_sentences` — plus the
+   resumable `.done` sidecar, global cross-run dedup, and ThreadPool pattern.
+   The single quality gate is `filter_bird_line`; translated scenes must stay
+   clauses (contain `li` or a `mi`/`sina`/`o` subject) so the conditioning
+   distribution matches `SCENES`. Needs `OLLAMA_NUM_PARALLEL` set
+   (`scripts/enable_ollama_parallel.sh`) and a matching `--concurrency`, or the
+   server serializes. Output → `data/processed/bird_translate.jsonl` (appended).
+
+3. **`scripts/gen_bird_haiku.py`** — the **primary** bulk generator. Claude
+   Haiku 4.5 writes valid in-persona Toki Pona directly — no
+   English→translate round-trip. The probe (2026-06-08) showed ~82 % gate
+   pass-rate with near-zero word invention, far better persona fidelity than
+   the `waso-teacher` (generic-TP) stream. Two modes: **ambient** (themed
+   batches for variety) and **reactive** (per-`SCENES` entry, anchoring the
+   conditioning distribution to what the desktop-bird templater will emit).
+   Every candidate passes `filter_bird_line`; a global cross-run dedup keeps
+   the corpus distinct. Needs `ANTHROPIC_API_KEY`. Output →
+   `data/processed/bird_haiku.jsonl` (appended; reruns extend).
+
+4. **`scripts/assemble_bird.py`** — merges the Haiku (primary, high-fidelity
+   ambient + reactive) and translate (supplementary topical variety) streams,
+   injects the curated bare interjections as ambient training examples (the
+   gold set is held out for eval, so the *training* set needs its own chirps),
+   re-gates every record through `filter_bird_line`, dedupes on
+   `(ctx, text)`, and excludes any record colliding with the held-out gold
+   (train ∩ gold = ∅). Output → `data/processed/bird.jsonl`
+   (`{ctx, text, mood, source}`). The disjoint held-out eval set lives in
+   `data/processed/bird_gold.jsonl`.
+
+### Fine-tune (Phase B) — `scripts/train_bird.py`
+
+Continue-trains the base deliverable
+(`student-8L384d-rebal-…/best.pt`) on the bird SFT set with reply-only loss
+masking. To avoid catastrophic forgetting of general Toki Pona on ~600 persona
+lines (the project's "balance is the lever" finding), each optimizer step is a
+coin-flip: with prob `--bird-frac` a masked bird batch, else a raw
+real+translated window (the unmasked regularizer). Two evals gate `best.pt`:
+
+- **`eval/gold_loss`** — held-out gold masked loss (primary, early-stop).
+- **`eval/real_nll`** — exact perplexity on the 200 held-out tatoeba docs (the
+  forgetting guard). Must stay near the base's 2.105 nll; `--forget-tol` (0.15)
+  warns if it drifts above.
+
+Defaults: `--bird-frac 0.5`, `--batch-size 24`, `--max-steps 3000`,
+`--learning-rate 3e-5` (cosine + warmup), bf16 on CUDA. Checkpoints land in
+`models/student_runs/bird-<UTC>/` (`best.pt`, `final.pt`, TensorBoard events,
+`run_config.json`).
+
+```sh
+.venv/bin/python scripts/train_bird.py --dry-run     # mask unit-test, no GPU
+.venv/bin/python scripts/train_bird.py --smoke        # 100-step smoke
+.venv/bin/python scripts/train_bird.py                # full fine-tune
+```
+
+### Inference — `scripts/talk_to_bird.py`
+
+Loads a fine-tuned bird checkpoint, feeds the cue (optionally after a TP
+scene), samples one short reply, strips the cue, and prints the Latin TP — or,
+with `--ucsur`, the sitelen pona rendering. `--loop` emits one bubble per
+`--interval` seconds in the `text⇥seconds` format the desktop-bird reads on
+stdin, so the deliverable hookup is:
+
+```sh
+../.venv/bin/python ../scripts/talk_to_bird.py --loop --ucsur | cargo run --release
+```
+
+`--scene "<tp>"` drives a reactive comment; otherwise it free-chirps
+(ambient). In `--loop` with no fixed `--scene`, it alternates ambient chirps
+with random `bird_persona.SCENES` reactions to show the conditioned behavior.
+
+### Status
+
+All six scripts (`bird_persona`, `build_bird_english`, `translate_bird`,
+`gen_bird_haiku`, `assemble_bird`, `train_bird`, `talk_to_bird`) are built and
+self-checking. The data pipeline and fine-tune have **not yet been run
+end-to-end** on `main` — no bird checkpoint is committed. To run the full
+pipeline: build the English seeds, translate them (needs the `waso-translator`
+Ollama model from Stage 2 v2), generate the Haiku bulk (needs
+`ANTHROPIC_API_KEY`), assemble, then fine-tune against the base student
+deliverable. The `bird_persona.py` self-check and `train_bird.py --dry-run`
+mask check are the pre-flight gates that need no GPU or API key.

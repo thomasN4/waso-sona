@@ -30,6 +30,10 @@ dependencies = [
     # train_student.py, talk_to_student.py, bench_student.py, and talk_to_bird.py
     # all import it.
     "sentencepiece>=0.2",
+    # Claude Haiku 4.5 is the primary generator for the desktop-bird persona SFT
+    # data (scripts/gen_bird_haiku.py) — it writes valid de-novo Toki Pona where
+    # local Gemma drifts off-persona. Needs ANTHROPIC_API_KEY in the environment.
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
