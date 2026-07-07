@@ -34,6 +34,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import augment_corpus  # noqa: E402
 
+from sitelen import is_legal_word  # noqa: E402
+
 DEFAULT_EVAL = REPO_ROOT / "data" / "processed" / "translation_eval.jsonl"
 
 
@@ -112,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         for r in ex.map(work, pairs):
             results.append(r)
 
-    chrfs, valid, copy, empty, errors = [], 0, 0, 0, 0
+    chrfs, valid, legal, copy, empty, errors = [], 0, 0, 0, 0, 0
     for r in results:
         hyp, ref, en = r["hyp"], r["ref"], r["en"]
         if r.get("error"):
@@ -124,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
         chrfs.append(chrf(hyp, ref))
         if augment_corpus._filter_sentence(hyp)[0]:
             valid += 1
+        # Word-shape signal, decomposed from `valid` (dictionary + grammar):
+        # fraction whose every token is a phonotactically legal TP word-shape.
+        if all(is_legal_word(w) for w in augment_corpus._WORD_RE.findall(hyp)):
+            legal += 1
         if hyp.lower().strip(".!? ") == en.lower().strip(".!? "):
             copy += 1
 
@@ -133,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  pairs scored : {n}", flush=True)
     print(f"  chrF (macro) : {mean_chrf:.2f}", flush=True)
     print(f"  valid TP     : {valid}/{n} ({100*valid/n:.1f}%)", flush=True)
+    print(f"  legal shape  : {legal}/{n} ({100*legal/n:.1f}%)", flush=True)
     print(f"  copied input : {copy}/{n} ({100*copy/n:.1f}%)", flush=True)
     print(f"  empty        : {empty}/{n} ({100*empty/n:.1f}%)", flush=True)
     if errors:

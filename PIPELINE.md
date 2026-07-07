@@ -143,8 +143,10 @@ Produces `data/processed/sft_train.jsonl` (~21,200 rows) and `sft_val.jsonl`
 
 Realized mode counts on the current corpora: ~7,980 continuation / ~4,440
 topic / ~9,950 paraphrase. Each candidate response runs through
-`augment_corpus._filter_sentence` (strict: zero-tolerance non-vocab,
-double-`li` / `li e` rejection, repetition caps, missing-predicate check).
+`augment_corpus._filter_sentence` (strict: zero-tolerance non-vocab —
+capitalized names must be phonotactically legal TP word-shapes via
+`sitelen.is_legal_word`, else `illegal_name` — double-`li` / `li e` rejection,
+repetition caps, missing-predicate check).
 Dedup is mode-aware: paraphrase keys on `(prompt, response)` (clusters reuse
 a target across sources), others on response only. Then drop any example
 over `--max-tokens` (default 1024). Split is deterministic by id-hash
@@ -235,6 +237,12 @@ Round-trips cleanly for any TP-phonotactic input, except sentence-final
 `.!?`, which collapse to a boundary space and are dropped on decode by
 design (sitelen pona does not write them). See
 [`tests/test_sitelen.py`](tests/test_sitelen.py) for the contract.
+
+The package also exports `is_legal_word(word)` (`sitelen/phonotactics.py`), a
+phonotactic word-shape checker built on `syllabify` — `(C)V(n)` syllables,
+legal letters, the forbidden `ti/ji/wo/wu` syllables, the `n`-cluster rule, and
+the bare-word `n`. The corpus/translation gate (`augment_corpus._filter_sentence`)
+uses it to verify that proper names are legal TP shapes.
 
 ---
 
@@ -571,12 +579,16 @@ the per-seed + global dedup, and the `.done` resumability sidecar **unchanged**.
 New parts are small: an `_english_to_tp_prompt(english)` few-shot builder, an
 English-source loader (replacing the TP `sentences.txt` input), and two
 translation-specific rejects — **leftover English** (non-TP letters / English
-tokens survived in the output) and **copy-of-source / refusal**. Output:
+tokens survived in the output) and **copy-of-source / refusal**. Capitalized
+leftovers that dodge the lowercase vocab check (an untranslated name like `Tom`
+/ `London`) are caught by `_filter_sentence`'s `illegal_name` — a proper name
+must be a phonotactically legal TP word-shape (`sitelen.is_legal_word`). Output:
 `data/processed/translated.jsonl` — `{source: "waso-translator/translate", eng,
 text}`.
 
 **5. Eval.** Translator quality on the held-out Tatoeba slice (chrF / BLEU vs the
-reference TP) plus the `_filter_sentence` validity pass-rate at inference; the
+reference TP) plus the `_filter_sentence` validity pass-rate and a decomposed
+phonotactic-legality (word-shape) rate at inference; the
 end-to-end signal is the **student's `eval/real_loss`** (v1 leaves it ~4.0 vs
 syn_val ~1.7 — translated content is the lever expected to close that gap).
 Optional QC: tp→en back-translation and similarity to the source English, to

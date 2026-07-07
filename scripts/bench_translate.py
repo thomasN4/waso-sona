@@ -28,6 +28,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import augment_corpus as ac  # noqa: E402
 from eval_translator import chrf  # noqa: E402
 
+from sitelen import is_legal_word  # noqa: E402
+
 DEFAULT_EVAL = REPO_ROOT / "data" / "processed" / "translation_eval.jsonl"
 
 
@@ -68,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     n = len(results)
     gross_tok = sum(r[1] for r in results)
     valid = sum(1 for r in results if r[0] and ac._filter_sentence(r[0])[0])
+    legal = sum(1 for r in results if r[0]
+                and all(is_legal_word(w) for w in ac._WORD_RE.findall(r[0])))
     chrfs = [chrf(r[0], r[2]) for r in results if r[0]]
     mean_chrf = sum(chrfs) / len(chrfs) if chrfs else 0.0
 
@@ -75,7 +79,8 @@ def main(argv: list[str] | None = None) -> int:
            f"fewshot={int(fewshot)} url={args.url.split('//')[-1].split('/')[0]}")
     print(f"[{cfg}]  n={n}  wall={wall:.1f}s  "
           f"sent/s={n/wall:.1f}  tok/s={gross_tok/wall:.0f}  "
-          f"valid={100*valid/n:.0f}%  chrF={mean_chrf:.1f}", flush=True)
+          f"valid={100*valid/n:.0f}%  legal={100*legal/n:.0f}%  "
+          f"chrF={mean_chrf:.1f}", flush=True)
     return 0
 
 

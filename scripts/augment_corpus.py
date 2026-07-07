@@ -27,6 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from sitelen import is_legal_word  # noqa: E402
 from sitelen.glyphs import WORD_TO_CODEPOINT  # noqa: E402
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
@@ -143,10 +144,15 @@ def _filter_sentence(sentence: str) -> tuple[bool, str]:
 
     lower_words = [w.lower() for w in words]
 
-    # Rule 1: unknown lowercase words (zero tolerance)
+    # Rule 1: unknown lowercase words (zero tolerance); proper names skip the
+    # dictionary but must still be phonotactically legal TP word-shapes (Toki
+    # Pona transliterates names into legal shapes), which catches leftover
+    # English like "Tom"/"London" that the vocab check can't see.
     for orig, lower in zip(words, lower_words):
         if orig[0].isupper():
-            continue  # proper name — allowed
+            if not is_legal_word(orig):
+                return False, "illegal_name"
+            continue  # legal-shape proper name — allowed
         if lower not in TP_VOCAB:
             return False, "unknown_word"
 
